@@ -54,9 +54,9 @@ pub fn install_client_certificate<P: AsRef<OsStr>>(
         certstore::CertStore_InstallClientCertificate(
             identifier,
             cert_blob.as_ptr(),
-            cert_blob.len() as u32,
+            cert_blob.len(),
             private_key_blob.as_ptr(),
-            private_key_blob.len() as u32,
+            private_key_blob.len(),
             private_key_password.as_ptr(),
         )
     };
@@ -80,7 +80,7 @@ pub fn install_root_ca_certificate<P: AsRef<OsStr>>(
         certstore::CertStore_InstallRootCACertificate(
             identifier,
             cert_blob.as_ptr(),
-            cert_blob.len() as u32,
+            cert_blob.len(),
         )
     };
     if result == -1 {
@@ -105,7 +105,7 @@ fn get_certificate_identifer_at(index: u32) -> Result<OsString, std::io::Error> 
         let mut identifier = certstore::CertStore_Identifier {
             identifier: [0u8; 17],
         };
-        let result = certstore::CertStore_GetCertificateIdentifierAt(index as u32, &mut identifier);
+        let result = certstore::CertStore_GetCertificateIdentifierAt(index as usize, &mut identifier);
         if result == -1 {
             Err(Error::last_os_error())
         } else {
