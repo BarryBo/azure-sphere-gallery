@@ -179,6 +179,7 @@ fn generate_bindings<P: AsRef<Path>>(header: P) {
         // Treat the type as opaque
         .opaque_type("IOTHUB_CLIENT_TRANSPORT_PROVIDER") // becomes u32
         .opaque_type("IOTHUB_DEVICE_CLIENT_LL_HANDLE") // becomes u32
+        .opaque_type("IOTHUB_MESSAGE_HANDLE") // becomes u32
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.

@@ -26,14 +26,6 @@ pub enum ProvDeviceResult {
     Disabled = azure_sphere_provisioning::PROV_DEVICE_RESULT_TAG_PROV_DEVICE_RESULT_DISABLED as isize
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum IotHubClientResult {
-    InvalidArg = azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_ARG as isize,
-    Error = azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_ERROR as isize,
-    InvalidSize = azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_SIZE as isize,
-    IndefiniteTime = azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INDEFINITE_TIME as isize
-}
-
 /// Error information about what failed
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ProvReturnValue {
@@ -46,7 +38,7 @@ pub enum ProvReturnValue {
     /// Provisioning failed
     ProvDeviceError(ProvDeviceResult),
     /// IoT hub device client creation failed
-    IotHubClientError(IotHubClientResult),
+    IotHubClientError(iothub_device_client_ll::ClientResult),
     /// Device provisioning failed for any other reason.
     GenericError
 }
@@ -102,11 +94,11 @@ pub fn create_with_device_auth_provisioning(
         },
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_IOTHUB_CLIENT_ERROR => {
             let iot_err = match result.iothub_client_error {
-                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_ARG => IotHubClientResult::InvalidArg,
-                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_ERROR => IotHubClientResult::Error,
-                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_SIZE => IotHubClientResult::InvalidSize,
-                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INDEFINITE_TIME => IotHubClientResult::IndefiniteTime,
-                _ => IotHubClientResult::Error
+                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_ARG => iothub_device_client_ll::ClientResult::InvalidArg,
+                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_ERROR => iothub_device_client_ll::ClientResult::Error,
+                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INVALID_SIZE => iothub_device_client_ll::ClientResult::InvalidSize,
+                azure_sphere_provisioning::IOTHUB_CLIENT_RESULT_TAG_IOTHUB_CLIENT_INDEFINITE_TIME => iothub_device_client_ll::ClientResult::IndefiniteTime,
+                _ => iothub_device_client_ll::ClientResult::Error
             };
             Err(ProvReturnValue::IotHubClientError(iot_err))
         },
