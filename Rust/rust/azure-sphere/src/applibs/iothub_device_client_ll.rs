@@ -568,7 +568,31 @@ impl IotHubDeviceClient {
     }
 
     // IoTHubDeviceClient_LL_DoWork
-    // IoTHubDeviceClient_LL_SetOption
+    pub fn do_work(&self) {
+        unsafe { iothub_device_client_ll::IoTHubDeviceClient_LL_DoWork(self.handle) };
+    }
+
+    unsafe fn set_option_internal(
+        &self,
+        option: &std::ffi::CString,
+        value: *const libc::c_void,
+    ) -> Result<(), ClientResult> {
+        let result = iothub_device_client_ll::IoTHubDeviceClient_LL_SetOption(
+            self.handle,
+            option.as_ptr(),
+            value,
+        );
+        Self::map_client_result(result)
+    }
+
+    // IoTHubDeviceClient_LL_SetOption is polymorphic, so we use generics to support many options
+    // It is unsafe because the option string and value type must match
+    // See https://github.com/Azure/azure-iot-sdk-c/blob/main/doc/Iothub_sdk_options.md
+    pub unsafe fn set_option<T>(&self, option: &str, value: T) -> Result<(), ClientResult> {
+        let option_name = std::ffi::CString::new(option.as_bytes()).unwrap();
+        unsafe { self.set_option_internal(&option_name, &value as *const _ as *const libc::c_void) }
+    }
+
     // IoTHubDeviceClient_LL_SetDeviceTwinCallback
     // IoTHubDeviceClient_LL_SendReportedState
     // IoTHubDeviceClient_LL_SetDeviceMethodCallback
