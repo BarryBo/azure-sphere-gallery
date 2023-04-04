@@ -1,6 +1,7 @@
 pub mod adc;
 pub mod application;
 pub mod applications;
+pub mod azure_sphere_provisioning;
 pub mod certstore;
 pub mod deviceauth;
 pub mod deviceauth_curl;

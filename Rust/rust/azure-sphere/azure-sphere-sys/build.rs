@@ -79,6 +79,13 @@ fn main() {
         "applibs/sysevent.h",
         "applibs/uart.h",
         "applibs/wificonfig.h",
+        "azure_prov_client/prov_device_ll_client.h",
+        "azureiot/azure_sphere_provisioning.h",
+        "azureiot/iothub_client_core_common.h",
+        "azureiot/iothub_device_client_ll.h",
+        "azureiot/iothub_message.h",
+        "azureiot/iothubtransportmqtt.h",
+        "azureiot/iothubtransportmqtt_websockets.h",
         "tlsutils/deviceauth.h",
         "tlsutils/deviceauth_curl.h",
     ]
@@ -169,6 +176,9 @@ fn generate_bindings<P: AsRef<Path>>(header: P) {
         .clang_arg("--include-directory=bindings")
         .clang_arg("--sysroot")
         .clang_arg(sysroot.to_str().unwrap())
+        // Treat the type as opaque
+        .opaque_type("IOTHUB_CLIENT_TRANSPORT_PROVIDER") // becomes u32
+        .opaque_type("IOTHUB_DEVICE_CLIENT_LL_HANDLE") // becomes u32
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
