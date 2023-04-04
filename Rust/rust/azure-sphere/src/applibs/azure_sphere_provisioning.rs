@@ -6,16 +6,8 @@
 //! device, and getting an Azure IoT Hub handle for you.
 
 use azure_sphere_sys::applibs::azure_sphere_provisioning;
+use crate::applibs::iothub_device_client_ll;
 use azure_sphere_sys::applibs::{iothubtransportmqtt, iothubtransportmqtt_websockets};
-
-/// The transport provider to be used
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TransportProvider {
-    /// Use the MQTT provider
-    MQTT,
-    /// Use the MQTT WebSocket provider
-    MQTTWebSocket
-}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ProvDeviceResult {
@@ -71,7 +63,7 @@ pub enum ProvReturnValue {
 pub fn create_with_device_auth_provisioning(
     id_scope: &str,
     timeout: libc::c_uint
-    ) -> Result<u32, ProvReturnValue>
+    ) -> Result<iothub_device_client_ll::IotHubDeviceClient, ProvReturnValue>
 {
     let id_scope_native = std::ffi::CString::new(id_scope.as_bytes()).unwrap();
     let mut handle:u32 = 0;
@@ -83,7 +75,9 @@ pub fn create_with_device_auth_provisioning(
         )
     };
     match result.result {
-        azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_OK => Ok(handle),
+        azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_OK => unsafe {
+            Ok(iothub_device_client_ll::IotHubDeviceClient::from_handle(handle))
+        },
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_INVALID_PARAM => Err(ProvReturnValue::InvalidParam),
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_NETWORK_NOT_READY => Err(ProvReturnValue::NetworkNotReady),
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_DEVICEAUTH_NOT_READY => Err(ProvReturnValue::DeviceAuthNotReady),
@@ -133,23 +127,22 @@ pub fn create_with_device_auth_provisioning(
 ///  * `iothub_uri` - The Azure IoT Hub URI received in the DPS registration process.
 ///  * `protocol` - Function pointer for protocol implementation
 /// 
-pub fn create_from_device_auth(iothub_uri: &str, protocol:TransportProvider) -> Result<u32, std::io::Error>
+pub fn create_from_device_auth(iothub_uri: &str, protocol:iothub_device_client_ll::TransportProvider) -> Result<iothub_device_client_ll::IotHubDeviceClient, std::io::Error>
 {
     let iothub_uri_native = std::ffi::CString::new(iothub_uri.as_bytes()).unwrap();
-    let result = unsafe {
+    unsafe {
         let protocol_native = match protocol {
-            TransportProvider::MQTT => iothubtransportmqtt::MQTT_Protocol as *mut libc::c_void as u32,
-            TransportProvider::MQTTWebSocket => iothubtransportmqtt_websockets::MQTT_WebSocket_Protocol as *mut libc::c_void as u32
+            iothub_device_client_ll::TransportProvider::MQTT => iothubtransportmqtt::MQTT_Protocol as *mut libc::c_void as u32,
+            iothub_device_client_ll::TransportProvider::MQTTWebSocket => iothubtransportmqtt_websockets::MQTT_WebSocket_Protocol as *mut libc::c_void as u32
         };
-        azure_sphere_provisioning::IoTHubDeviceClient_LL_CreateWithAzureSphereFromDeviceAuth(
+        let handle = azure_sphere_provisioning::IoTHubDeviceClient_LL_CreateWithAzureSphereFromDeviceAuth(
             iothub_uri_native.as_ptr() as *const libc::c_char, 
             protocol_native
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::from_raw_os_error(libc::EINVAL))
-    } else {
-       // BUGBUG: return an object representing IOTHUB_DEVICE_CLIENT_LL_HANDLE
-        Ok(result)
+        );
+        if handle == 0 {
+            Err(std::io::Error::from_raw_os_error(libc::EINVAL))
+        } else {
+            Ok(iothub_device_client_ll::IotHubDeviceClient::from_handle(handle))
+        }
     }
 }
