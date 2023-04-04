@@ -356,6 +356,46 @@ unsafe extern "C" fn temp_connection_status_callback(
     );
 }
 
+// bugbug: temp placeholder for the build
+unsafe extern "C" fn temp_device_twin_callback(
+    update_state: iothub_device_client_ll::DEVICE_TWIN_UPDATE_STATE,
+    payload: *const libc::c_uchar,
+    size: usize,
+    user_context_callback: *mut libc::c_void,
+) {
+    println!(
+        "temp_device_twin_callback: update_state={:?} payLoad={:?} size={:?} user_context_callback={:?}",
+        update_state, payload, size, user_context_callback
+    );
+}
+
+// bugbug: temp placeholder for the build
+unsafe extern "C" fn temp_reported_state_callback(
+    status_code: libc::c_int,
+    user_context_callback: *mut libc::c_void,
+) {
+    println!(
+        "temp_reported_state_callback: status_code={:?} user_context_callback={:?}",
+        status_code, user_context_callback
+    );
+}
+
+// bugbug: temp placeholder for the build
+unsafe extern "C" fn temp_device_method_callback(
+    method_name: *const libc::c_char,
+    payload: *const libc::c_uchar,
+    size: usize,
+    response: *mut *mut libc::c_uchar,
+    response_size: *mut usize,
+    user_context_callback: *mut libc::c_void,
+) -> libc::c_int {
+    println!(
+        "temp_device_method_callback: method_name={:?} payload={:?} size={:?} response={:?} response_size={:?} user_context_callback={:?}",
+        method_name, payload, size, response, response_size, user_context_callback
+    );
+    0
+}
+
 impl IotHubDeviceClient {
     fn map_client_result(result: u32) -> Result<(), ClientResult> {
         match result {
@@ -594,9 +634,77 @@ impl IotHubDeviceClient {
     }
 
     // IoTHubDeviceClient_LL_SetDeviceTwinCallback
+    pub fn set_device_twin_callback(
+        &self,
+        _connection_status_callback: u32,
+        _user_context_callback: u32,
+    ) -> Result<(), ClientResult> {
+        let result = unsafe {
+            // bugbug: fill in the args
+            iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceTwinCallback(
+                self.handle,
+                Some(temp_device_twin_callback),
+                std::ptr::null_mut(),
+            )
+        };
+        Self::map_client_result(result)
+    }
+
     // IoTHubDeviceClient_LL_SendReportedState
+    pub fn send_reported_state(
+        &self,
+        _reported_state: &[u8],
+        _size: usize,
+        _reported_state_callback: u32,
+        _user_context_callback: u32,
+    ) -> Result<(), ClientResult> {
+        let result = unsafe {
+            // bugbug: fill in the args
+            iothub_device_client_ll::IoTHubDeviceClient_LL_SendReportedState(
+                self.handle,
+                std::ptr::null_mut(),
+                0,
+                Some(temp_reported_state_callback),
+                std::ptr::null_mut(),
+            )
+        };
+        Self::map_client_result(result)
+    }
+
     // IoTHubDeviceClient_LL_SetDeviceMethodCallback
+    pub fn set_device_method_callback(
+        &self,
+        _device_method_callback: u32,
+        _user_context_callback: u32,
+    ) -> Result<(), ClientResult> {
+        let result = unsafe {
+            // bugbug: fill in the args
+            iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceMethodCallback(
+                self.handle,
+                Some(temp_device_method_callback),
+                std::ptr::null_mut(),
+            )
+        };
+        Self::map_client_result(result)
+    }
     // IoTHubDeviceClient_LL_DeviceMethodResponse
+    pub fn device_method_response(
+        &self,
+        method_id: *mut std::ffi::c_void, // bugbug: improve this type
+        response: &[u8],
+        status_code: i32,
+    ) -> Result<(), ClientResult> {
+        let result = unsafe {
+            iothub_device_client_ll::IoTHubDeviceClient_LL_DeviceMethodResponse(
+                self.handle,
+                method_id,
+                response.as_ptr(),
+                response.len(),
+                status_code,
+            )
+        };
+        Self::map_client_result(result)
+    }
 }
 
 impl Drop for IotHubDeviceClient {
