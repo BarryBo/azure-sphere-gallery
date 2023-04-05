@@ -29,6 +29,7 @@ pub mod applibs {
     sys_mod!(eventloop);
     sys_mod!(gpio);
     sys_mod!(i2c);
+    sys_mod!(iothub_client_options);
     sys_mod!(iothub_client_core_common);
     sys_mod!(iothub_device_client_ll);
     sys_mod!(iothub_message);

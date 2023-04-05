@@ -1,4 +1,7 @@
+use azure_sphere_sys::applibs::azure_sphere_provisioning;
+use azure_sphere_sys::applibs::iothub_client_options;
 use azure_sphere_sys::applibs::iothub_device_client_ll;
+use azure_sphere_sys::applibs::prov_device_ll_client;
 use azure_sphere_sys::applibs::{iothubtransportmqtt, iothubtransportmqtt_websockets};
 use std::slice;
 
@@ -97,6 +100,13 @@ pub enum ConfirmationResult {
     BecauseDestroy,
     MessageTimeout,
     Error,
+}
+
+pub struct HttpProxyOptions {
+    host_address: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<Vec<u8>>, // not String, as it doesn't have to be strictly UTF-8
 }
 
 // bugbug: possible Rust compiler bug.  This function is reported as dead code, but
@@ -748,14 +758,11 @@ impl IotHubDeviceClient {
 
     unsafe fn set_option_internal(
         &self,
-        option: &std::ffi::CString,
+        option: *const libc::c_char,
         value: *const libc::c_void,
     ) -> Result<(), ClientResult> {
-        let result = iothub_device_client_ll::IoTHubDeviceClient_LL_SetOption(
-            self.handle,
-            option.as_ptr(),
-            value,
-        );
+        let result =
+            iothub_device_client_ll::IoTHubDeviceClient_LL_SetOption(self.handle, option, value);
         Self::map_client_result(result)
     }
 
@@ -764,7 +771,207 @@ impl IotHubDeviceClient {
     // See https://github.com/Azure/azure-iot-sdk-c/blob/main/doc/Iothub_sdk_options.md
     pub unsafe fn set_option<T>(&self, option: &str, value: T) -> Result<(), ClientResult> {
         let option_name = std::ffi::CString::new(option.as_bytes()).unwrap();
-        unsafe { self.set_option_internal(&option_name, &value as *const _ as *const libc::c_void) }
+        unsafe {
+            self.set_option_internal(
+                option_name.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_LOG_TRACE/PROV_OPTION_LOG_TRACE (bool*)
+    pub fn set_option_log_trace(&self, value: bool) -> Result<(), ClientResult> {
+        unsafe {
+            let value = if value { 1u8 } else { 0u8 };
+            self.set_option_internal(
+                iothub_client_options::OPTION_LOG_TRACE.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for PROV_REGISTRATION_ID (const char*)
+    pub fn set_option_registration_id(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                prov_device_ll_client::PROV_REGISTRATION_ID.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for PROV_OPTION_TIMEOUT (long*)
+    pub fn set_option_timeout(&self, value: usize) -> Result<(), ClientResult> {
+        unsafe {
+            self.set_option_internal(
+                prov_device_ll_client::PROV_OPTION_TIMEOUT.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_X509_CERT (const char*)
+    pub fn set_option_x509_cert(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                iothub_client_options::OPTION_X509_CERT.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_X509_PRIVATE_KEY (const char*)
+    pub fn set_option_x509_private_key(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                iothub_client_options::OPTION_X509_PRIVATE_KEY.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_KEEP_ALIVE (int*)
+    pub fn set_option_keep_alive(&self, value: i32) -> Result<(), ClientResult> {
+        unsafe {
+            self.set_option_internal(
+                iothub_client_options::OPTION_KEEP_ALIVE.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_CONNECTION_TIMEOUT (int*)
+    pub fn set_option_connection_timeout(&self, value: i32) -> Result<(), ClientResult> {
+        unsafe {
+            self.set_option_internal(
+                iothub_client_options::OPTION_CONNECTION_TIMEOUT.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
+    pub fn set_option_sas_token_lifetime(&self, value: usize) -> Result<(), ClientResult> {
+        unsafe {
+            self.set_option_internal(
+                iothub_client_options::OPTION_SAS_TOKEN_LIFETIME.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // deprecated: IoTHubDeviceClient_LL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_PRODUCT_INFO (const char*)
+    pub fn set_option_product_info(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                iothub_client_options::OPTION_PRODUCT_INFO.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_MODEL_ID (const char*)
+    pub fn set_option_model_id(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                iothub_client_options::OPTION_MODEL_ID.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_AUTO_URL_ENCODE_DECODE (bool*)
+    pub fn set_option_auto_url_encode_decode(&self, value: bool) -> Result<(), ClientResult> {
+        unsafe {
+            let value = if value { 1u8 } else { 0u8 };
+            self.set_option_internal(
+                iothub_client_options::OPTION_AUTO_URL_ENCODE_DECODE.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // deprecated: IoTHubDeviceClient_LL_SetOption for OPTION_MESSAGE_TIMEOUT
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_HTTP_PROXY (HTTP_PROXY_OPTIONS*)
+    pub fn option_set_http_proxy(&self, value: &HttpProxyOptions) -> Result<(), ClientResult> {
+        let port = value.port as i32;
+        unsafe {
+            let host_address = std::ffi::CString::new(value.host_address.as_bytes()).unwrap();
+            let username = if let Some(username) = value.username.as_ref() {
+                std::ffi::CString::new(username.as_bytes())
+                    .unwrap()
+                    .as_bytes()
+                    .as_ptr()
+            } else {
+                std::ptr::null() as *const libc::c_char
+            };
+            let password = if let Some(password) = value.password.as_ref() {
+                password.as_ptr()
+            } else {
+                std::ptr::null() as *const libc::c_char
+            };
+            let option = azure_sphere_provisioning::HTTP_PROXY_OPTIONS_TAG {
+                host_address: host_address.as_ptr(),
+                port,
+                username,
+                password,
+            };
+            self.set_option_internal(
+                azure_sphere_provisioning::OPTION_HTTP_PROXY.as_ptr(),
+                &option as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_TRUSTED_CERT (const char*)
+    pub fn option_set_trusted_cert(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                azure_sphere_provisioning::OPTION_TRUSTED_CERT.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_X509_ECC_CERT (const char*)
+    pub fn option_set_x509_ecc_cert(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                azure_sphere_provisioning::OPTION_X509_ECC_CERT.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_X509_ECC_KEY (const char*)
+    pub fn option_set_x509_ecc_key(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.set_option_internal(
+                azure_sphere_provisioning::OPTION_X509_ECC_KEY.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
+
+    // IoTHubDeviceClient_LL_SetOption for OPTION_TLS_VERSION (int*)
+    pub fn option_tls_version(&self, value: i32) -> Result<(), ClientResult> {
+        unsafe {
+            self.set_option_internal(
+                azure_sphere_provisioning::OPTION_TLS_VERSION.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
     }
 
     unsafe extern "C" fn device_twin_callback_wrapper(

@@ -82,6 +82,7 @@ fn main() {
         "azure_prov_client/prov_device_ll_client.h",
         "azureiot/azure_sphere_provisioning.h",
         "azureiot/iothub_client_core_common.h",
+        "azureiot/iothub_client_options.h",
         "azureiot/iothub_device_client_ll.h",
         "azureiot/iothub_message.h",
         "azureiot/iothubtransportmqtt.h",
