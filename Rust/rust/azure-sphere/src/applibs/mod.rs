@@ -10,6 +10,7 @@ pub mod eventloop_timer_utilities;
 pub mod gpio;
 pub mod i2c;
 pub mod iothub_device_client_ll;
+pub mod iothub_message;
 pub mod log;
 pub mod networking;
 pub mod networking_curl;
