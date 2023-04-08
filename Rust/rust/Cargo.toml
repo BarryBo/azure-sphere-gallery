@@ -3,6 +3,7 @@
 members = [
     "samples/allapis",
     "samples/ADC/adc_high_level_app",
+    "samples/AzureIoT",
     "samples/DHCP",
     "samples/CertStore/cert_store_high_level_app",
     "samples/CustomNTP/custom_ntp_high_level_app",
@@ -13,6 +14,7 @@ members = [
 default-members = [
     "samples/allapis",
     "samples/ADC/adc_high_level_app",
+    "samples/AzureIoT",
     "samples/DHCP",
     "samples/CertStore/cert_store_high_level_app",
     "samples/CustomNTP/custom_ntp_high_level_app",
