@@ -46,6 +46,7 @@ use crate::cloud::Cloud;
 pub mod azureiot;
 pub mod user_interface;
 use crate::user_interface::UserInterface;
+use signal_hook_registry;
 
 const STEP_SUCCESS: i32 = 0;
 const STEP_SIGNAL_REGISTRATION: i32 = 1;
@@ -77,11 +78,14 @@ macro_rules! get_step {
 fn hook_sigterm() -> Result<Arc<AtomicBool>, std::io::Error> {
     set_step!(STEP_SIGNAL_REGISTRATION);
     let term = Arc::new(AtomicBool::new(false));
-    signal_hook::flag::register_conditional_shutdown(
-        signal_hook::consts::SIGTERM,
-        STEP_TERMHANDLER_SIGTERM,
-        Arc::clone(&term),
-    )?;
+
+    let term_clone = Arc::clone(&term);
+    let _ = unsafe {
+        signal_hook_registry::register(15 /* SIGTERM */, move || {
+            set_step!(STEP_TERMHANDLER_SIGTERM);
+            term_clone.store(true, Ordering::Relaxed)
+        })
+    }?;
 
     Ok(term)
 }
