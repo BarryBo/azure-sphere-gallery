@@ -58,8 +58,9 @@ impl Connection {
         azs::debug!("Connection::default_connection_callback\n");
     }
 }
+
+/// Mutable state associated with an AzureIoT instance
 struct AzureIoTState {
-    cb: Callbacks,
     elt: eventloop_timer_utilities::EventLoopTimer,
     connect_period_seconds: u64,
 }
@@ -84,9 +85,15 @@ impl AzureIoTState {
     }
 }
 
+// An AzureIoT object, representing an IoT Hub client
 pub struct AzureIoT {
+    /// Mutable state.  This is kept separately so that the AzureIoTState can be mutated
+    /// without having to take a mutable ref to the connection object.
     state: Rc<RefCell<AzureIoTState>>,
+    /// Immutable state, the underlying IoT Hub client connection
     connection: Connection,
+    /// Callback functions
+    cb: Callbacks,
 }
 
 impl IoCallback for AzureIoT {
@@ -110,7 +117,6 @@ impl AzureIoT {
         let connection = Connection::new(model_id);
 
         let state = AzureIoTState {
-            cb,
             elt,
             connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
         };
@@ -118,12 +124,17 @@ impl AzureIoT {
         Ok(Self {
             state: Rc::new(RefCell::new(state)),
             connection,
+            cb,
         })
     }
 
     pub fn initialize(&mut self, _failure_callback: FailureCallback) -> Result<(), std::io::Error> {
+        // Bump the refcount on the AzureIoTState
         let state_clone = self.state.clone();
 
+        // Initialize the connection, including a mutable lambda.  It acquires ownership of the clone
+        // of self.state, and there are no other mutable references, so it can borrow_mut().
+        // Note that checking for borrow_mut() is only done at runtime.
         self.connection
             .intialize(Box::new(move |status, client_handle| {
                 let mut state = state_clone.borrow_mut();
