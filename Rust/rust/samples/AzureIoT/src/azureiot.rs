@@ -1,11 +1,13 @@
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
+use azs::applibs::iothub_message;
 use azs::applibs::iothub_message::IotHubMessageRef;
+use azs::applibs::networking;
 use azure_sphere as azs;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
-pub type FailureCallback = Box<dyn FnMut(i32 /* exit_code */)>;
+pub type FailureCallback = Box<dyn FnMut(FailureReason)>;
 
 pub struct Callbacks {
     pub connection_status: Option<Box<dyn FnMut(bool /* connected */)>>,
@@ -20,11 +22,39 @@ pub struct Callbacks {
 /// check if device is connected to the internet and Azure client is setup every second
 const DEFAULT_CONNECT_PERIOD_SECONDS: u64 = 1;
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ConnectionStatus {
     NotStarted,
     Started,
     Complete,
     Failed,
+}
+
+// This is equivalent to some of the ExitCode_* constants in the C sample
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FailureReason {
+    /// ExitCode_IsNetworkingReady_Failed
+    NetworkingIsReadyFailed,
+}
+
+/// An enum indicating possible result codes when performing Azure IoT-related operations
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum IoTResult {
+    /// The operation could not be performed as no network connection was available
+    NoNetwork,
+    /// The operation failed for another reason not explicitly listed
+    OtherFailure,
+}
+
+/// Authentication state of the client with respect to the Azure IoT Hub.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ConnectionState {
+    /// Client is not authenticated by the Azure IoT Hub.
+    NotAuthenticated,
+    /// Client has initiated authentication to the Azure IoT Hub
+    AuthenticationInitiated,
+    /// Client is authenticated by the Azure IoT Hub.
+    Authenticated,
 }
 
 pub type ConnectionCallbackHandler = Box<dyn FnMut(ConnectionStatus, i32)>;
@@ -60,9 +90,11 @@ impl Connection {
 }
 
 /// Mutable state associated with an AzureIoT instance
+#[derive(Debug)]
 struct AzureIoTState {
     elt: eventloop_timer_utilities::EventLoopTimer,
     connect_period_seconds: u64,
+    connection_state: ConnectionState,
 }
 
 impl AzureIoTState {
@@ -94,6 +126,8 @@ pub struct AzureIoT {
     connection: Connection,
     /// Callback functions
     cb: Callbacks,
+    /// Failure callback
+    failure_callback: FailureCallback,
 }
 
 impl IoCallback for AzureIoT {
@@ -110,7 +144,11 @@ impl IoCallback for AzureIoT {
 }
 
 impl AzureIoT {
-    pub fn new(model_id: String, cb: Callbacks) -> Result<Self, std::io::Error> {
+    pub fn new(
+        model_id: String,
+        failure_callback: FailureCallback,
+        cb: Callbacks,
+    ) -> Result<Self, std::io::Error> {
         let elt = eventloop_timer_utilities::EventLoopTimer::new()?;
         let connect_period = Duration::new(DEFAULT_CONNECT_PERIOD_SECONDS, 0);
         elt.set_period(connect_period)?;
@@ -119,16 +157,18 @@ impl AzureIoT {
         let state = AzureIoTState {
             elt,
             connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
+            connection_state: ConnectionState::NotAuthenticated,
         };
 
         Ok(Self {
             state: Rc::new(RefCell::new(state)),
             connection,
             cb,
+            failure_callback,
         })
     }
 
-    pub fn initialize(&mut self, _failure_callback: FailureCallback) -> Result<(), std::io::Error> {
+    pub fn initialize(&mut self) -> Result<(), std::io::Error> {
         // Bump the refcount on the AzureIoTState
         let state_clone = self.state.clone();
 
@@ -153,5 +193,49 @@ impl AzureIoT {
     pub fn test(&self) {
         azs::debug!("AzureIoT::test()\n");
         self.connection.test()
+    }
+
+    fn is_connection_ready_to_send_telemetry(&mut self) -> bool {
+        let is_ready = networking::is_networking_ready();
+        match is_ready {
+            Ok(true) => true,
+            Ok(false) => {
+                azs::debug!(
+                    "WARNING: Cannot send Azure IoT Hub telemetry because the network is not up.\n"
+                );
+                false
+            }
+            Err(err) => {
+                azs::debug!(
+                    "WARNING: Cannot send Azure IoT Hub telemetry because the network is not up: {}.\n",
+                err);
+                (self.failure_callback)(FailureReason::NetworkingIsReadyFailed);
+                false
+            }
+        }
+    }
+
+    pub fn send_telemetry(
+        &mut self,
+        json_message: String,
+        _iso8601_datetime: Option<String>,
+    ) -> Result<(), IoTResult> {
+        if !self.is_connection_ready_to_send_telemetry() {
+            return Err(IoTResult::NoNetwork);
+        }
+        if self.state.borrow().connection_state != ConnectionState::Authenticated {
+            // AzureIoT client is not authenticated. Log a warning and return.
+            azs::debug!("WARNING: Azure IoT Hub is not authenticated. Not sending telemetry.\n");
+            return Err(IoTResult::OtherFailure);
+        }
+        let message = iothub_message::IotHubMessage::from_string(json_message.as_str());
+        if message.is_err() {
+            azs::debug!("ERROR: unable to create a new IoTHubMessage.\n");
+            return Err(IoTResult::OtherFailure);
+        }
+        let _message = message.unwrap();
+        // bugbug: call IoTHubDeviceClient_LL_SendEventAsync
+
+        Ok(())
     }
 }

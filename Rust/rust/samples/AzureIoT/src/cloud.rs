@@ -1,5 +1,5 @@
 use crate::azureiot::AzureIoT;
-use crate::azureiot::{Callbacks, FailureCallback};
+use crate::azureiot::{Callbacks, FailureCallback, IoTResult};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
@@ -17,6 +17,12 @@ pub struct Telemetry {
     pub temperature: f32,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum CloudResult {
+    NoNetwork,
+    OtherFailure,
+}
+
 pub struct Cloud {
     last_acked_version: u32,
     date_time_buffer: String,
@@ -32,6 +38,14 @@ impl IoCallback for Cloud {
 
     unsafe fn fd(&self) -> i32 {
         self.azureiot.fd()
+    }
+}
+
+fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<(), CloudResult> {
+    match azureiot_result {
+        Ok(_) => Ok(()),
+        Err(IoTResult::NoNetwork) => Err(CloudResult::NoNetwork),
+        Err(IoTResult::OtherFailure) => Err(CloudResult::OtherFailure),
     }
 }
 
@@ -65,8 +79,8 @@ impl Cloud {
             cloud_to_device: None,
         };
 
-        let mut azureiot = AzureIoT::new(String::from(MODEL_ID), callbacks)?;
-        azureiot.initialize(failure_callback)?;
+        let mut azureiot = AzureIoT::new(String::from(MODEL_ID), failure_callback, callbacks)?;
+        azureiot.initialize()?;
 
         Ok(Self {
             last_acked_version,
@@ -123,7 +137,11 @@ impl Cloud {
         )
     }
 
-    pub fn send_telemetry(&self, telemetry: &Telemetry, timestamp: Option<SystemTime>) {
+    pub fn send_telemetry(
+        &mut self,
+        telemetry: &Telemetry,
+        timestamp: Option<SystemTime>,
+    ) -> Result<(), CloudResult> {
         let utc_datetime = if let Some(t) = timestamp {
             Some(Self::build_utc_datetime(t))
         } else {
@@ -137,5 +155,9 @@ impl Cloud {
             serialized_telemetry,
             utc_datetime
         );
+        let result = self
+            .azureiot
+            .send_telemetry(serialized_telemetry, utc_datetime);
+        azureiot_to_cloud_result(result)
     }
 }

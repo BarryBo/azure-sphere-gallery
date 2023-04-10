@@ -57,6 +57,7 @@ const STEP_MISSING_HOSTNAME: i32 = 4;
 const STEP_INIT_UI: i32 = 6;
 const STEP_EVENTLOOP: i32 = 7;
 const STEP_CLOUD_INIT: i32 = 8;
+const STEP_FAILURE_CALLBACK: i32 = 9;
 
 /// Currently executing program step
 static STEP: AtomicI32 = AtomicI32::new(STEP_SUCCESS);
@@ -171,8 +172,10 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
 
     set_step!(STEP_CLOUD_INIT);
     let mut cloud = Cloud::initialize(
-        Box::new(|exit_code: i32| {
-            azs::debug!("Failure Callback {:?}", exit_code);
+        Box::new(|reason: azureiot::FailureReason| {
+            azs::debug!("Failure Callback {:?}", reason);
+            // bugbug: map FailureReason to exit codes
+            let exit_code = STEP_FAILURE_CALLBACK;
             std::process::exit(exit_code)
         }),
         Some(Box::new(|status: bool, from_cloud: bool| {
@@ -192,7 +195,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };
-    cloud.send_telemetry(&reading, Some(SystemTime::now()));
+    let _ = cloud.send_telemetry(&reading, Some(SystemTime::now()));
     event_loop.register_io(IoEvents::Input, &mut cloud)?;
 
     //
