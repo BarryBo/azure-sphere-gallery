@@ -30,6 +30,7 @@ Licensed under the MIT License. */
 //    exitCode:  replaced by STEP enumeration, of what is about to be attempted, via the get_step and set_step macros.  And std::io::Error(), which wraps errno nicely, and supports custom extensions
 //    eventLoop: moved into main() as a local variable
 //    callback:  moved into a lambda
+#![allow(dead_code)] // bugbug: remove when code complete
 
 use azs::applibs::eventloop::{EventLoop, IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
@@ -39,10 +40,12 @@ use std::env::args;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
+pub mod cloud;
+use crate::cloud::Cloud;
+pub mod azureiot;
 pub mod user_interface;
 use crate::user_interface::UserInterface;
-//use std::io::Error;
 
 const STEP_SUCCESS: i32 = 0;
 const STEP_SIGNAL_REGISTRATION: i32 = 1;
@@ -50,8 +53,9 @@ const STEP_TERMHANDLER_SIGTERM: i32 = 2;
 const STEP_IS_NETWORK_READY: i32 = 3;
 const STEP_MISSING_HOSTNAME: i32 = 4;
 //const STEP_INIT_TELEMETRY_TIMER: i32 = 5;
-const STEP_INIT_BUTTON_TIMER: i32 = 6;
+const STEP_INIT_UI: i32 = 6;
 const STEP_EVENTLOOP: i32 = 7;
+const STEP_CLOUD_INIT: i32 = 8;
 
 /// Currently executing program step
 static STEP: AtomicI32 = AtomicI32::new(STEP_SUCCESS);
@@ -95,7 +99,7 @@ impl IoCallback for UserInterfaceContainer {
         if self.ui.button_a.is_pressed() {
             let new_telemetry_upload_enabled = !self.telemetry_upload_enabled;
             azs::debug!(
-                "INFO: Telemetry upload enabled state changed (via button press):{:?}",
+                "INFO: Telemetry upload enabled state changed (via button press):{:?}\n",
                 new_telemetry_upload_enabled
             );
             self.set_thermometer_telemetry_upload_enabled(new_telemetry_upload_enabled, false);
@@ -113,6 +117,10 @@ impl IoCallback for UserInterfaceContainer {
 impl UserInterfaceContainer {
     fn device_moved(&self) {
         azs::debug!("INFO: Device moved.\n");
+
+        let _now = SystemTime::now();
+
+        // bugbug: call Cloud_SendThermometerMovedEvent
     }
 
     fn set_thermometer_telemetry_upload_enabled(
@@ -142,7 +150,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     //
     // InitPeripheralsAndHandlers() inlined into main() as the created objects must all remain live
     //
-    set_step!(STEP_INIT_BUTTON_TIMER);
+    set_step!(STEP_INIT_UI);
     let mut event_loop = EventLoop::new()?;
 
     let ui = UserInterface::new()?;
@@ -156,6 +164,30 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
         telemetry_upload_enabled: false,
     };
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
+
+    set_step!(STEP_CLOUD_INIT);
+    let mut cloud = Cloud::initialize(
+        Box::new(|exit_code: i32| {
+            azs::debug!("Failure Callback {:?}", exit_code);
+            std::process::exit(exit_code)
+        }),
+        Some(Box::new(|status: bool, from_cloud: bool| {
+            azs::debug!(
+                "Upload Enabled Change callback {:?} {:?}\n",
+                status,
+                from_cloud
+            )
+        })),
+        Some(Box::new(|alert: String| {
+            azs::debug!("Alert: {:?}\n", alert)
+        })),
+        Some(Box::new(|connected: bool| {
+            azs::debug!("Connected callback: {:?}\n", connected)
+        })),
+    )?;
+    azs::debug!("Calling cloud.test()\n");
+    cloud.test();
+    event_loop.register_io(IoEvents::Input, &mut cloud)?;
 
     //
     // Main loop
