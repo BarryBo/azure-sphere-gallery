@@ -2,6 +2,8 @@ use crate::azureiot::AzureIoT;
 use crate::azureiot::{Callbacks, FailureCallback};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
+use chrono::{DateTime, Utc};
+use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
 
@@ -9,6 +11,11 @@ pub type CloudTelemetryUploadEnabledChangeCallback =
     Box<dyn FnMut(bool /* status */, bool /* from_cloud */)>;
 pub type CloudDisplayAlertCallback = Box<dyn FnMut(String)>;
 pub type CloudConnectionChangedCallback = Box<dyn FnMut(bool /* connected */)>;
+
+#[derive(Debug)]
+pub struct Telemetry {
+    pub temperature: f32,
+}
 
 pub struct Cloud {
     last_acked_version: u32,
@@ -94,5 +101,24 @@ impl Cloud {
             "WARNING: Cloud - no handler registered for ConnectionChanged - connected {:?}\n",
             connected
         );
+    }
+
+    pub fn build_utc_datetime(t: SystemTime) -> String {
+        let dt: DateTime<Utc> = t.clone().into();
+        // %+ is 	ISO 8601 / RFC 3339 date & time format.
+        // Such as "2001-07-08T00:34:60.026490+09:30"
+        format!("{}", dt.format("%+"))
+    }
+
+    pub fn send_telemetry(&self, telemetry: &Telemetry, timestamp: Option<SystemTime>) {
+        let _utc_datetime = if let Some(t) = timestamp {
+            Some(Self::build_utc_datetime(t))
+        } else {
+            None
+        };
+        // Ideally, we'd use serde_json here.  But it adds 43kb to the binary size.
+        //  {"temperature":28.3}
+        let serialized_telemetry = format!("{{\"temperature\"={}}}", telemetry.temperature);
+        azs::debug!("Serialized telemetry = {}\n", serialized_telemetry);
     }
 }

@@ -187,6 +187,8 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     )?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
+    let reading = cloud::Telemetry { temperature: 28.3 };
+    cloud.send_telemetry(&reading, Some(SystemTime::now()));
     event_loop.register_io(IoEvents::Input, &mut cloud)?;
 
     //
