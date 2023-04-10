@@ -2,7 +2,7 @@ use crate::azureiot::AzureIoT;
 use crate::azureiot::{Callbacks, FailureCallback};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
@@ -104,14 +104,27 @@ impl Cloud {
     }
 
     pub fn build_utc_datetime(t: SystemTime) -> String {
+        // Ideally, we'd use chrono here.  But it adds 60kb to the binary size.
+        //let dt: DateTime<Utc> = t.clone().into();
+        //// %+ is 	ISO 8601 / RFC 3339 date & time format.
+        //// Such as "2001-07-08T00:34:60.026490+09:30"
+        //format!("{}", dt.format("%+"))
+
+        // This reduces chrono to only 18kb...
         let dt: DateTime<Utc> = t.clone().into();
-        // %+ is 	ISO 8601 / RFC 3339 date & time format.
-        // Such as "2001-07-08T00:34:60.026490+09:30"
-        format!("{}", dt.format("%+"))
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            dt.year(),
+            dt.month(),
+            dt.day(),
+            dt.hour(),
+            dt.minute(),
+            dt.second()
+        )
     }
 
     pub fn send_telemetry(&self, telemetry: &Telemetry, timestamp: Option<SystemTime>) {
-        let _utc_datetime = if let Some(t) = timestamp {
+        let utc_datetime = if let Some(t) = timestamp {
             Some(Self::build_utc_datetime(t))
         } else {
             None
@@ -119,6 +132,10 @@ impl Cloud {
         // Ideally, we'd use serde_json here.  But it adds 43kb to the binary size.
         //  {"temperature":28.3}
         let serialized_telemetry = format!("{{\"temperature\"={}}}", telemetry.temperature);
-        azs::debug!("Serialized telemetry = {}\n", serialized_telemetry);
+        azs::debug!(
+            "Serialized telemetry = {} at {:?}\n",
+            serialized_telemetry,
+            utc_datetime
+        );
     }
 }
