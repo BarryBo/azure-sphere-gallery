@@ -169,42 +169,22 @@ pub struct IotHubDeviceClient {
     handle: u32,
 }
 
-/// Event confirmation callback
-pub trait EventConfirmationCallback {
-    /// Callback
-    fn cb(&mut self, result: ConfirmationResult);
-}
+pub type EventConfirmationCallback = Box<dyn FnMut(ConfirmationResult)>;
 
 /// Message callback
-pub trait MessageCallback {
-    /// Callback
-    fn cb(&mut self, message: &iothub_message::IotHubMessageRef) -> MessageDisposition;
-}
+pub type MessageCallback = Box<dyn FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition>;
 
 /// Connection status callback
-pub trait ConnectionStatusCallback {
-    /// Callback
-    fn cb(&mut self, result: ConnectionStatus, result_reason: ConnectionStatusReason);
-}
+pub type ConnectionStatusCallback = Box<dyn FnMut(ConnectionStatus, ConnectionStatusReason)>;
 
 /// Device twin callback
-pub trait DeviceTwinCallback {
-    /// Callback
-    fn cb(&mut self, update_state: DeviceTwinUpdateState, payload: Vec<u8>);
-}
+pub type DeviceTwinCallback = Box<dyn FnMut(DeviceTwinUpdateState, Vec<u8>)>;
 
 /// Reported state callback
-pub trait ReportedStateCallback {
-    /// Callback
-    fn cb(&mut self, status_code: libc::c_int);
-}
+pub type ReportedStateCallback = Box<dyn FnMut(i32)>;
 
 /// Device method callback
-pub trait DeviceMethodCallback {
-    /// Callback
-    /// Returns an HTTP status code and a response payload
-    fn cb(&mut self, method_name: &std::ffi::CStr, payload: &Vec<u8>) -> (libc::c_int, Vec<u8>);
-}
+pub type DeviceMethodCallback = Box<dyn FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>)>;
 
 impl IotHubDeviceClient {
     /// Helper to map a client result from C to a Result<>
@@ -303,7 +283,7 @@ impl IotHubDeviceClient {
         result: iothub_device_client_ll::IOTHUB_CLIENT_CONFIRMATION_RESULT,
         user_context_callback: *mut libc::c_void,
     ) {
-        let context = (user_context_callback as *mut Box<&mut dyn EventConfirmationCallback>)
+        let callback = (user_context_callback as *mut EventConfirmationCallback)
             .as_mut()
             .unwrap();
         let result = match result {
@@ -320,7 +300,7 @@ impl IotHubDeviceClient {
                 ConfirmationResult::Error
             },
         };
-        context.cb(result)
+        callback(result)
     }
 
     /// Asynchronous call to send the message
@@ -329,11 +309,9 @@ impl IotHubDeviceClient {
     pub fn send_event_async(
         &self,
         event_message: &iothub_message::IotHubMessage,
-        callback: &mut dyn EventConfirmationCallback,
+        callback: EventConfirmationCallback,
     ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(
-            Box::new(callback) as Box<&mut dyn EventConfirmationCallback>
-        ));
+        let context = Box::into_raw(callback);
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SendEventAsync(
                 self.handle,
@@ -349,7 +327,7 @@ impl IotHubDeviceClient {
         message: iothub_device_client_ll::IOTHUB_MESSAGE_HANDLE,
         user_context_callback: *mut libc::c_void,
     ) -> iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT {
-        let context = (user_context_callback as *mut Box<&mut dyn MessageCallback>)
+        let callback = (user_context_callback as *mut MessageCallback)
             .as_mut()
             .unwrap();
 
@@ -357,7 +335,7 @@ impl IotHubDeviceClient {
         // became a true struct again.  Ignore the message ID here completely, trusting that
         // the caller will hold onto the IotHubMessage in its closure.
         let message = &iothub_message::IotHubMessageRef::from_handle(message);
-        let result = context.cb(&message);
+        let result = callback(&message);
         match result {
             MessageDisposition::Abandoned => {
                 iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT_TAG_IOTHUBMESSAGE_ABANDONED
@@ -375,11 +353,8 @@ impl IotHubDeviceClient {
     /// message to the device. This is a blocking call.
     ///
     /// See IoTHubDeviceClient_LL_SetMessageCallback()
-    pub fn set_message_callback(
-        &self,
-        callback: &mut dyn MessageCallback,
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(Box::new(callback) as Box<&mut dyn MessageCallback>));
+    pub fn set_message_callback(&self, callback: MessageCallback) -> Result<(), ClientResult> {
+        let context = Box::into_raw(callback);
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetMessageCallback(
                 self.handle,
@@ -433,10 +408,10 @@ impl IotHubDeviceClient {
             _ => ConnectionStatusReason::UnknownError,
         };
 
-        let context = (user_context_callback as *mut Box<&mut dyn ConnectionStatusCallback>)
+        let callback = (user_context_callback as *mut ConnectionStatusCallback)
             .as_mut()
             .unwrap();
-        context.cb(connection_status, result_reason)
+        callback(connection_status, result_reason)
     }
 
     /// Sets up the connection status callback to be invoked representing the status of
@@ -445,11 +420,9 @@ impl IotHubDeviceClient {
     /// See IoTHubDeviceClient_LL_SetConnectionStatusCallback()
     pub fn set_connection_status_callback(
         &self,
-        callback: &mut dyn ConnectionStatusCallback,
+        callback: ConnectionStatusCallback,
     ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(
-            Box::new(callback) as Box<&mut dyn ConnectionStatusCallback>
-        ));
+        let context = Box::into_raw(callback);
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetConnectionStatusCallback(
                 self.handle,
@@ -784,21 +757,19 @@ impl IotHubDeviceClient {
             }
             _ => DeviceTwinUpdateState::Partial,
         };
-        let context = (user_context_callback as *mut Box<&mut dyn DeviceTwinCallback>)
+        let callback = (user_context_callback as *mut DeviceTwinCallback)
             .as_mut()
             .unwrap();
-        context.cb(update_state, payload.to_vec());
+        callback(update_state, payload.to_vec());
     }
 
     /// This API specifies a callback to be used when the device receives a desired state update.
     /// See IoTHubDeviceClient_LL_SetDeviceTwinCallback()
     pub fn set_device_twin_callback(
         &self,
-        callback: &mut dyn DeviceTwinCallback, // BUGBUG: this should be Option()
+        callback: DeviceTwinCallback, // BUGBUG: this should be Option()
     ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(
-            Box::new(callback) as Box<&mut dyn DeviceTwinCallback>
-        ));
+        let context = Box::into_raw(callback);
 
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceTwinCallback(
@@ -814,10 +785,10 @@ impl IotHubDeviceClient {
         status_code: libc::c_int,
         user_context_callback: *mut libc::c_void,
     ) {
-        let context = (user_context_callback as *mut Box<&mut dyn ReportedStateCallback>)
+        let callback = (user_context_callback as *mut ReportedStateCallback)
             .as_mut()
             .unwrap();
-        context.cb(status_code);
+        callback(status_code);
     }
 
     /// This API sends a report of the device's properties and their current values.
@@ -826,12 +797,9 @@ impl IotHubDeviceClient {
     pub fn send_reported_state(
         &self,
         reported_state: &[u8],
-        callback: &mut dyn ReportedStateCallback, // BUGBUG: this should be Option()
+        callback: ReportedStateCallback, // BUGBUG: this should be Option()
     ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(
-            Box::new(callback) as Box<&mut dyn ReportedStateCallback>
-        ));
-
+        let context = Box::into_raw(callback);
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SendReportedState(
                 self.handle,
@@ -855,10 +823,10 @@ impl IotHubDeviceClient {
         let method_name = std::ffi::CStr::from_ptr(method_name);
         let payload = slice::from_raw_parts(payload, size).to_vec();
 
-        let context = (user_context_callback as *mut Box<&mut dyn DeviceMethodCallback>)
+        let callback = (user_context_callback as *mut DeviceMethodCallback)
             .as_mut()
             .unwrap();
-        let (response_code, response_data) = context.cb(&method_name, &payload);
+        let (response_code, response_data) = callback(&method_name, &payload);
 
         // `response` must be memory allocated via C malloc() and doesn't need to be null-terminated
         let response_native = libc::malloc(response_data.len());
@@ -878,11 +846,9 @@ impl IotHubDeviceClient {
     /// See IoTHubDeviceClient_LL_SetDeviceMethodCallback()
     pub fn set_device_method_callback(
         &self,
-        callback: &mut dyn DeviceMethodCallback, // BUGBUG: this should be Option()
+        callback: DeviceMethodCallback, // BUGBUG: this should be Option()
     ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(Box::new(
-            Box::new(callback) as Box<&mut dyn DeviceMethodCallback>
-        ));
+        let context = Box::into_raw(callback);
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceMethodCallback(
                 self.handle,

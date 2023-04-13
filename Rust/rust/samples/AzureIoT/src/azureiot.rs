@@ -1,5 +1,6 @@
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
+use azs::applibs::iothub_device_client_ll;
 use azs::applibs::iothub_message;
 use azs::applibs::iothub_message::IotHubMessageRef;
 use azs::applibs::networking;
@@ -8,6 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 pub type FailureCallback = Box<dyn FnMut(FailureReason)>;
+use std::cell::RefMut;
+use std::fmt;
 
 pub struct Callbacks {
     pub connection_status: Option<Box<dyn FnMut(bool /* connected */)>>,
@@ -19,16 +22,19 @@ pub struct Callbacks {
     pub cloud_to_device: Option<Box<dyn FnMut(IotHubMessageRef /* message */)>>,
 }
 
+// dyn FnMut doesn't support Debug, so stub out here.
+impl fmt::Debug for Callbacks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Callbacks").finish_non_exhaustive()
+    }
+}
+
 /// check if device is connected to the internet and Azure client is setup every second
 const DEFAULT_CONNECT_PERIOD_SECONDS: u64 = 1;
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ConnectionStatus {
-    NotStarted,
-    Started,
-    Complete,
-    Failed,
-}
+/// back off when reconnecting
+const MIN_CONNECT_PERIOD_SECONDS: u64 = 10;
+/// back off limit
+const MAX_CONNECT_PERIOD_SECONDS: u64 = 10 * 60;
 
 // This is equivalent to some of the ExitCode_* constants in the C sample
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -48,7 +54,7 @@ pub enum IoTResult {
 
 /// Authentication state of the client with respect to the Azure IoT Hub.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum ConnectionState {
+enum AuthenticationState {
     /// Client is not authenticated by the Azure IoT Hub.
     NotAuthenticated,
     /// Client has initiated authentication to the Azure IoT Hub
@@ -57,7 +63,16 @@ enum ConnectionState {
     Authenticated,
 }
 
-pub type ConnectionCallbackHandler = Box<dyn FnMut(ConnectionStatus, i32)>;
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+    NotStarted,
+    Started,
+    Complete(Rc<iothub_device_client_ll::IotHubDeviceClient>),
+    Failed,
+}
+
+/// Connection callback.
+pub type ConnectionCallbackHandler = Box<dyn FnMut(ConnectionStatus)>;
 
 struct Connection {
     model_id: String,
@@ -81,10 +96,10 @@ impl Connection {
 
     pub fn test(&self) {
         azs::debug!("Connection::test {:?}\n", self.model_id);
-        (*self.status_callback.borrow_mut())(ConnectionStatus::Complete, 1);
+        (*self.status_callback.borrow_mut())(ConnectionStatus::Failed);
     }
 
-    fn default_connection_callback(_status: ConnectionStatus, _client_handle: i32) {
+    fn default_connection_callback(_status: ConnectionStatus) {
         azs::debug!("Connection::default_connection_callback\n");
     }
 }
@@ -94,26 +109,106 @@ impl Connection {
 struct AzureIoTState {
     elt: eventloop_timer_utilities::EventLoopTimer,
     connect_period_seconds: u64,
-    connection_state: ConnectionState,
+    authentication_state: AuthenticationState,
+    client_handle: Option<Rc<iothub_device_client_ll::IotHubDeviceClient>>,
+    /// Callback functions
+    cb: Callbacks,
+}
+
+fn connection_callback_handler(rc_state: &Rc<RefCell<AzureIoTState>>, status: ConnectionStatus) {
+    azs::debug!("AzureIotState::connection_callback_handler\n");
+    match status {
+        ConnectionStatus::NotStarted => {}
+        ConnectionStatus::Started => {
+            azs::debug!("INFO: Azure IoT Hub connection started.\n");
+        }
+        ConnectionStatus::Complete(client_handle) => {
+            // bugbug: implement
+            azs::debug!("INFO: Azure IoT Hub connection complete.\n");
+            {
+                let mut rc_state_borrowed = rc_state.borrow_mut();
+                rc_state_borrowed.client_handle = Some(client_handle.clone());
+
+                // Successfully connected, so make sure the polling frequency is back to the default
+                rc_state_borrowed.connect_period_seconds = DEFAULT_CONNECT_PERIOD_SECONDS;
+
+                // Set client authentication state to initiated. This is done to indicate that
+                // SetUpAzureIoTHubClient() has been called (and so should not be called again) while the
+                // client is waiting for a response via the ConnectionStatusCallback().
+                rc_state_borrowed.authentication_state =
+                    AuthenticationState::AuthenticationInitiated;
+            }
+
+            // bugbug: set callbacks
+            let captured_state = Rc::clone(&rc_state);
+            let _ = client_handle.set_message_callback(Box::new(
+                move |message: &iothub_message::IotHubMessageRef| {
+                    azs::debug!("INFO: Azure IoT Hub message received.\n");
+                    let state = captured_state.borrow_mut();
+                    cloud_to_device_callback(state, message);
+                    iothub_device_client_ll::MessageDisposition::Abandoned
+                },
+            ));
+        }
+        ConnectionStatus::Failed => {
+            let mut rc_state_borrowed = rc_state.borrow_mut();
+            // If we fail to connect, reduce the polling frequency, starting at
+            // AzureIoTMinReconnectPeriodSeconds and with a backoff up to
+            // AzureIoTMaxReconnectPeriodSeconds
+            rc_state_borrowed.connect_period_seconds =
+                if rc_state_borrowed.connect_period_seconds == DEFAULT_CONNECT_PERIOD_SECONDS {
+                    MIN_CONNECT_PERIOD_SECONDS
+                } else {
+                    let new_period = rc_state_borrowed.connect_period_seconds * 2;
+                    if new_period > MAX_CONNECT_PERIOD_SECONDS {
+                        MAX_CONNECT_PERIOD_SECONDS
+                    } else {
+                        new_period
+                    }
+                };
+            let connect_period = Duration::new(rc_state_borrowed.connect_period_seconds, 0);
+            let _ = rc_state_borrowed.elt.set_period(connect_period);
+
+            azs::debug!(
+                "ERROR: Azure IoT Hub connection failed - will retry in {} seconds.\n",
+                rc_state_borrowed.connect_period_seconds
+            );
+        }
+    }
+}
+
+fn cloud_to_device_callback(
+    _rc_state: RefMut<AzureIoTState>,
+    _message: &iothub_message::IotHubMessageRef,
+) -> iothub_device_client_ll::MessageDisposition {
+    // bugbug: implement
+    iothub_device_client_ll::MessageDisposition::Rejected
 }
 
 impl AzureIoTState {
-    fn connection_callback_handler(&mut self, status: ConnectionStatus, _client_handle: i32) {
-        azs::debug!("AzureIotState::connection_callback_handler\n");
-        match status {
-            ConnectionStatus::NotStarted => {}
-            ConnectionStatus::Started => {
-                azs::debug!("INFO: Azure IoT Hub connection started.\n");
-            }
-            ConnectionStatus::Complete => {
-                // bugbug: implement
-                azs::debug!("ConnectionStatus::Complete\n");
-            }
-            ConnectionStatus::Failed => {
-                // bugbug: implement
-                azs::debug!("ConnectionStatus::Failed\n");
-            }
-        }
+    fn device_twin_callback(
+        &mut self,
+        _update_state: iothub_device_client_ll::DeviceTwinUpdateState,
+        _payload: Vec<u8>,
+    ) {
+        // bugbug: implement
+    }
+
+    fn device_message_callback(
+        &mut self,
+        _method_name: &std::ffi::CStr,
+        _payload: &Vec<u8>,
+    ) -> (i32, Vec<u8>) {
+        // bugbug: implement
+        (0, vec![])
+    }
+
+    fn message_status_callback(
+        &mut self,
+        _result: iothub_device_client_ll::ConnectionStatus,
+        _result_reason: iothub_device_client_ll::ConnectionStatusReason,
+    ) {
+        // bugbug: implement
     }
 }
 
@@ -124,8 +219,6 @@ pub struct AzureIoT {
     state: Rc<RefCell<AzureIoTState>>,
     /// Immutable state, the underlying IoT Hub client connection
     connection: Connection,
-    /// Callback functions
-    cb: Callbacks,
     /// Failure callback
     failure_callback: FailureCallback,
 }
@@ -157,30 +250,30 @@ impl AzureIoT {
         let state = AzureIoTState {
             elt,
             connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
-            connection_state: ConnectionState::NotAuthenticated,
+            authentication_state: AuthenticationState::NotAuthenticated,
+            client_handle: None,
+            cb,
         };
 
         Ok(Self {
             state: Rc::new(RefCell::new(state)),
             connection,
-            cb,
             failure_callback,
         })
     }
 
     pub fn initialize(&mut self) -> Result<(), std::io::Error> {
         // Bump the refcount on the AzureIoTState
-        let state_clone = self.state.clone();
+        let mut captured_state = self.state.clone();
 
         // Initialize the connection, including a mutable lambda.  It acquires ownership of the clone
         // of self.state, and there are no other mutable references, so it can borrow_mut().
         // Note that checking for borrow_mut() is only done at runtime.
-        self.connection
-            .intialize(Box::new(move |status, client_handle| {
-                let mut state = state_clone.borrow_mut();
-                state.connection_callback_handler(status, client_handle);
-                state.connect_period_seconds = 2;
-            }));
+        self.connection.intialize(Box::new(move |status| {
+            connection_callback_handler(&mut captured_state, status);
+            let mut state = captured_state.borrow_mut();
+            state.connect_period_seconds = u64::MAX;
+        }));
 
         // bugbug: the IoCallback trait means the AzureIoT object can only have
         // one EventLoop callback.  We need two here, one for AzureIoTConnectTimerEventHandler
@@ -223,7 +316,7 @@ impl AzureIoT {
         if !self.is_connection_ready_to_send_telemetry() {
             return Err(IoTResult::NoNetwork);
         }
-        if self.state.borrow().connection_state != ConnectionState::Authenticated {
+        if self.state.borrow().authentication_state != AuthenticationState::Authenticated {
             // AzureIoT client is not authenticated. Log a warning and return.
             azs::debug!("WARNING: Azure IoT Hub is not authenticated. Not sending telemetry.\n");
             return Err(IoTResult::OtherFailure);
