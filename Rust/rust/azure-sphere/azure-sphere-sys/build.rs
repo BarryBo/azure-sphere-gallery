@@ -149,6 +149,7 @@ fn main() {
     println!("cargo:rustc-link-lib=c");
     println!("cargo:rustc-link-lib=applibs");
     println!("cargo:rustc-link-lib=tlsutils");
+    println!("cargo:rustc-link-lib=azureiot");
     println!(
         "cargo:rustc-link-search={}",
         patched_libs_path.as_path().to_str().unwrap()
