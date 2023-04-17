@@ -7,10 +7,26 @@ use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
 
-pub type CloudTelemetryUploadEnabledChangeCallback =
-    Box<dyn FnMut(bool /* status */, bool /* from_cloud */)>;
-pub type CloudDisplayAlertCallback = Box<dyn FnMut(String)>;
-pub type CloudConnectionChangedCallback = Box<dyn FnMut(bool /* connected */)>;
+pub trait CloudCallbacks {
+    fn telemetry_upload_enabled_change(&mut self, status: bool, from_cloud: bool) {
+        azs::debug!("WARNING: Cloud - no handler registered for TelemetryUploadEnabled - status {:?} from_cloud {:?}\n", status, from_cloud);
+    }
+
+    fn display_alert(&mut self, message: String) {
+        azs::debug!(
+            "WARNING: Cloud - no handler registered for DisplayAlert - message {:?}\n",
+            message
+            );        
+    }
+
+    fn connection_change(&mut self, connected: bool) {
+        azs::debug!(
+            "WARNING: Cloud - no handler registered for ConnectionChanged - connected {:?}\n",
+            connected
+        );
+    }
+
+}
 
 #[derive(Debug)]
 pub struct Telemetry {
@@ -23,15 +39,14 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub struct Cloud {
+pub struct Cloud<'a> {
     last_acked_version: u32,
     date_time_buffer: String,
-    telemetry_upload_enabled_change_callback: CloudTelemetryUploadEnabledChangeCallback,
-    display_alert_callback: CloudDisplayAlertCallback,
+    cloud_callbacks: &'a mut dyn CloudCallbacks,
     azureiot: AzureIoT,
 }
 
-impl IoCallback for Cloud {
+impl<'a> IoCallback for Cloud<'a> {
     fn event(&mut self, events: IoEvents) {
         self.azureiot.event(events)
     }
@@ -49,26 +64,15 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl Cloud {
+impl<'a> Cloud<'a> {
     pub fn initialize(
         failure_callback: FailureCallback,
-        telemetry_upload_enabled_change_callback: Option<CloudTelemetryUploadEnabledChangeCallback>,
-        display_alert_callback: Option<CloudDisplayAlertCallback>,
-        connection_changed_callback: Option<CloudConnectionChangedCallback>,
+        cloud_callbacks: &'a mut dyn CloudCallbacks
     ) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
-        let telemetry_upload_enabled_change_callback = telemetry_upload_enabled_change_callback
-            .unwrap_or(Box::new(
-                Self::default_thermometer_telemetry_upload_enabled_change_callback,
-            ));
-
-        let display_alert_callback =
-            display_alert_callback.unwrap_or(Box::new(Self::default_display_alert_callback));
-
-        let connection_changed_callback = connection_changed_callback
-            .unwrap_or(Box::new(Self::default_connection_change_callback));
+        let connection_changed_callback = Box::new(Self::default_connection_change_callback);
 
         let callbacks = Callbacks {
             connection_status: Some(connection_changed_callback),
@@ -85,36 +89,20 @@ impl Cloud {
         Ok(Self {
             last_acked_version,
             date_time_buffer,
-            telemetry_upload_enabled_change_callback,
-            display_alert_callback,
+            cloud_callbacks,
             azureiot,
         })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
+        self.cloud_callbacks.display_alert(String::from("Hello from Cloud::test()"));
         self.azureiot.test()
     }
 
-    fn default_thermometer_telemetry_upload_enabled_change_callback(
-        status: bool,
-        from_cloud: bool,
-    ) {
-        azs::debug!("WARNING: Cloud - no handler registered for TelemetryUploadEnabled - status {:?} from_cloud {:?}\n", status, from_cloud);
-    }
-
-    fn default_display_alert_callback(message: String) {
-        azs::debug!(
-            "WARNING: Cloud - no handler registered for DisplayAlert - message {:?}\n",
-            message
-        );
-    }
-
-    fn default_connection_change_callback(connected: bool) {
-        azs::debug!(
-            "WARNING: Cloud - no handler registered for ConnectionChanged - connected {:?}\n",
-            connected
-        );
+    fn default_connection_change_callback(_connected: bool) {
+        // bugbug:
+        //self.cloud_callbacks.connection_change(connected);
     }
 
     pub fn build_utc_datetime(t: SystemTime) -> String {

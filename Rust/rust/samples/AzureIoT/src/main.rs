@@ -47,6 +47,7 @@ pub mod azureiot;
 pub mod user_interface;
 use crate::user_interface::UserInterface;
 use signal_hook_registry;
+use crate::cloud::CloudCallbacks;
 
 const STEP_SUCCESS: i32 = 0;
 const STEP_SIGNAL_REGISTRATION: i32 = 1;
@@ -139,6 +140,28 @@ impl UserInterfaceContainer {
     }
 }
 
+struct Application {
+
+}
+
+impl CloudCallbacks for Application {
+    fn telemetry_upload_enabled_change(&mut self, status: bool, from_cloud: bool) {
+        azs::debug!(
+            "Upload Enabled Change callback {:?} {:?}\n",
+            status,
+            from_cloud
+        )
+    }
+
+    fn display_alert(&mut self, message: String) {
+        azs::debug!("Alert: {:?}\n", message)
+    }
+
+    fn connection_change(&mut self, connected: bool) {
+        azs::debug!("Connected callback: {:?}\n", connected)
+    }
+}
+
 // A main(), except that it returns a Result<T,E>, making it easy to invoke functions using the '?' operator.
 fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     let term = hook_sigterm()?;
@@ -170,6 +193,8 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     };
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
 
+    let mut app = Application {};
+
     set_step!(STEP_CLOUD_INIT);
     let mut cloud = Cloud::initialize(
         Box::new(|reason: azureiot::FailureReason| {
@@ -178,20 +203,8 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
             let exit_code = STEP_FAILURE_CALLBACK;
             std::process::exit(exit_code)
         }),
-        Some(Box::new(|status: bool, from_cloud: bool| {
-            azs::debug!(
-                "Upload Enabled Change callback {:?} {:?}\n",
-                status,
-                from_cloud
-            )
-        })),
-        Some(Box::new(|alert: String| {
-            azs::debug!("Alert: {:?}\n", alert)
-        })),
-        Some(Box::new(|connected: bool| {
-            azs::debug!("Connected callback: {:?}\n", connected)
-        })),
-    )?;
+        &mut app
+     )?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };
