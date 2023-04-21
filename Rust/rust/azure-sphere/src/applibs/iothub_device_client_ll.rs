@@ -1,7 +1,7 @@
-//! APIs that allow a user (usually a device) to communicate with an Azure IoTHub.
+//! APIs that allow a user (usually a device) to communicate with an Azure IotHub.
 //!
-//! IoTHubDeviceClient_LL is a module that allows a user (usually a
-//! device) to communicate with an Azure IoTHub. It can send events
+//! IotHubDeviceClientLowLevel is a module that allows a user (usually a
+//! device) to communicate with an Azure IotHub. It can send events
 //! and receive messages. At any given moment in time there can only
 //! be at most 1 message callback function.
 use crate::applibs::iothub_message;
@@ -165,28 +165,11 @@ pub struct HttpProxyOptions {
 
 /// An IoT Hub device client wrapper.
 #[derive(Debug)]
-pub struct IotHubDeviceClient {
+pub struct IotHubDeviceClientLowLevel {
     handle: u32,
 }
 
-pub type EventConfirmationCallback = Box<dyn FnMut(ConfirmationResult)>;
-
-/// Message callback
-pub type MessageCallback = Box<dyn FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition>;
-
-/// Connection status callback
-pub type ConnectionStatusCallback = Box<dyn FnMut(ConnectionStatus, ConnectionStatusReason)>;
-
-/// Device twin callback
-pub type DeviceTwinCallback = Box<dyn FnMut(DeviceTwinUpdateState, Vec<u8>)>;
-
-/// Reported state callback
-pub type ReportedStateCallback = Box<dyn FnMut(i32)>;
-
-/// Device method callback
-pub type DeviceMethodCallback = Box<dyn FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>)>;
-
-impl IotHubDeviceClient {
+impl IotHubDeviceClientLowLevel {
     /// Helper to map a client result from C to a Result<>
     fn map_client_result(result: u32) -> Result<(), ClientResult> {
         match result {
@@ -213,7 +196,7 @@ impl IotHubDeviceClient {
     /// Sample connection string:
     ///   HostName=[IoT Hub name goes here].[IoT Hub suffix goes here, e.g., private.azure-devices-int.net];DeviceId=[Device ID goes here];SharedAccessKey=[Device key goes here];
     ///
-    /// See IoTHubDeviceClient_LL_CreateFromConnectionString()
+    /// See IotHubDeviceClient_LL_CreateFromConnectionString()
     pub fn from_connection_string(
         connection_string: &str,
         protocol: TransportProvider,
@@ -244,7 +227,7 @@ impl IotHubDeviceClient {
     /// Creates a IoT Hub client for communication with an existing IoT
     /// Hub using the device auth module.
     ///
-    /// See IoTHubDeviceClient_LL_CreateFromDeviceAuth()
+    /// See IotHubDeviceClientLL_CreateFromDeviceAuth()
     pub fn from_device_auth(
         iothub_uri: &str,
         device_id: &str,
@@ -279,13 +262,13 @@ impl IotHubDeviceClient {
         Self { handle }
     }
 
-    unsafe extern "C" fn event_confirmation_callback_wrapper(
+    unsafe extern "C" fn event_confirmation_callback_wrapper<F>(
         result: iothub_device_client_ll::IOTHUB_CLIENT_CONFIRMATION_RESULT,
         user_context_callback: *mut libc::c_void,
-    ) {
-        let callback = (user_context_callback as *mut EventConfirmationCallback)
-            .as_mut()
-            .unwrap();
+    ) where
+        F: FnMut(ConfirmationResult),
+    {
+        let callback = &mut *(user_context_callback as *mut F);
         let result = match result {
             iothub_device_client_ll::IOTHUB_CLIENT_CONFIRMATION_RESULT_TAG_IOTHUB_CLIENT_CONFIRMATION_OK => {
                 ConfirmationResult::Ok
@@ -305,31 +288,35 @@ impl IotHubDeviceClient {
 
     /// Asynchronous call to send the message
     ///
-    /// See IoTHubDeviceClient_LL_SendEventAsync()
-    pub fn send_event_async(
+    /// See IotHubDeviceClientLL_SendEventAsync()
+    pub fn send_event_async<F>(
         &self,
         event_message: &iothub_message::IotHubMessage,
-        callback: EventConfirmationCallback,
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+        callback: F,
+    ) -> Result<(), ClientResult>
+    where
+        F: FnMut(ConfirmationResult),
+    {
+        let mut context = callback;
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SendEventAsync(
                 self.handle,
                 event_message.get_handle(),
-                Some(Self::event_confirmation_callback_wrapper),
-                context as _,
+                Some(Self::event_confirmation_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
     }
 
-    unsafe extern "C" fn message_callback_wrapper(
+    unsafe extern "C" fn message_callback_wrapper<F>(
         message: iothub_device_client_ll::IOTHUB_MESSAGE_HANDLE,
         user_context_callback: *mut libc::c_void,
-    ) -> iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT {
-        let callback = (user_context_callback as *mut MessageCallback)
-            .as_mut()
-            .unwrap();
+    ) -> iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT
+    where
+        F: FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition,
+    {
+        let callback = &mut *(user_context_callback as *mut F);
 
         // BUGBUG: it would be simpler if IotHubMessageRef was removed, and IotHubMessage
         // became a true struct again.  Ignore the message ID here completely, trusting that
@@ -352,35 +339,24 @@ impl IotHubDeviceClient {
     /// Sets up the message callback to be invoked when IoT Hub issues a
     /// message to the device. This is a blocking call.
     ///
-    /// See IoTHubDeviceClient_LL_SetMessageCallback()
-    pub fn set_message_callback(&self, callback: MessageCallback) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+    /// See IotHubDeviceClientLL_SetMessageCallback()
+    pub fn set_message_callback<F>(&self, callback: F) -> Result<(), ClientResult>
+    where
+        F: FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition,
+    {
+        let mut context = callback;
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetMessageCallback(
                 self.handle,
-                Some(Self::message_callback_wrapper),
-                context as _,
+                Some(Self::message_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
     }
 
-    unsafe extern "C" fn connection_status_callback_wrapper(
-        result: iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS,
-        result_reason: iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_REASON,
-        user_context_callback: *mut libc::c_void,
-    ) {
-        let connection_status = match result {
-            iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_TAG_IOTHUB_CLIENT_CONNECTION_AUTHENTICATED => {
-                ConnectionStatus::Authenticated
-            }
-            iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_TAG_IOTHUB_CLIENT_CONNECTION_UNAUTHENTICATED => {
-                ConnectionStatus::Unauthenticated
-            }
-            _ => ConnectionStatus::Unauthenticated,
-        };
-
-        let result_reason = match result_reason {
+    fn map_connection_status(result_reason: u32) -> ConnectionStatusReason {
+        match result_reason {
             iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_REASON_TAG_IOTHUB_CLIENT_CONNECTION_EXPIRED_SAS_TOKEN => {
                 ConnectionStatusReason::ExpiredSasToken
             }
@@ -406,28 +382,46 @@ impl IotHubDeviceClient {
                 ConnectionStatusReason::NoPingResponse
             }
             _ => ConnectionStatusReason::UnknownError,
+        }
+    }
+
+    unsafe extern "C" fn connection_status_callback_wrapper<F>(
+        result: iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS,
+        result_reason: iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_REASON,
+        user_context_callback: *mut libc::c_void,
+    ) where
+        F: FnMut(ConnectionStatus, ConnectionStatusReason),
+    {
+        let connection_status = match result {
+            iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_TAG_IOTHUB_CLIENT_CONNECTION_AUTHENTICATED => {
+                ConnectionStatus::Authenticated
+            }
+            iothub_device_client_ll::IOTHUB_CLIENT_CONNECTION_STATUS_TAG_IOTHUB_CLIENT_CONNECTION_UNAUTHENTICATED => {
+                ConnectionStatus::Unauthenticated
+            }
+            _ => ConnectionStatus::Unauthenticated,
         };
 
-        let callback = (user_context_callback as *mut ConnectionStatusCallback)
-            .as_mut()
-            .unwrap();
+        let result_reason = Self::map_connection_status(result_reason);
+
+        let callback = &mut *(user_context_callback as *mut F);
         callback(connection_status, result_reason)
     }
 
     /// Sets up the connection status callback to be invoked representing the status of
     /// the connection to IOT Hub. This is a blocking call.
     ///
-    /// See IoTHubDeviceClient_LL_SetConnectionStatusCallback()
-    pub fn set_connection_status_callback(
-        &self,
-        callback: ConnectionStatusCallback,
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+    /// See IotHubDeviceClientLL_SetConnectionStatusCallback()
+    pub fn set_connection_status_callback<F>(&self, callback: F) -> Result<(), ClientResult>
+    where
+        F: FnMut(ConnectionStatus, ConnectionStatusReason),
+    {
+        let mut context = callback;
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetConnectionStatusCallback(
                 self.handle,
-                Some(Self::connection_status_callback_wrapper),
-                context as _,
+                Some(Self::connection_status_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
@@ -435,7 +429,7 @@ impl IotHubDeviceClient {
 
     /// Set the retry policy
     ///
-    /// See IoTHubDeviceClient_LL_SetRetryPolicy()
+    /// See IotHubDeviceClientLL_SetRetryPolicy()
     pub fn set_retry_policy(
         &self,
         retry_policy: ClientRetryPolicy,
@@ -474,7 +468,7 @@ impl IotHubDeviceClient {
 
     /// Get the retry policy
     ///
-    /// See IoTHubDeviceClient_LL_GetRetryPolicy()
+    /// See IotHubDeviceClientLL_GetRetryPolicy()
     pub fn get_retry_policy(&self) -> Result<(ClientRetryPolicy, usize), ClientResult> {
         let mut retry_policy_native: u32 = 0;
         let mut retry_timeout_limit_in_seconds: usize = 0;
@@ -515,15 +509,15 @@ impl IotHubDeviceClient {
 
     /// This function MUST be called by the user so work (sending/receiving data on the wire,
     /// computing and enforcing timeout controls, managing the connection to the IoT Hub) can
-    /// be done by the IoTHubClient.
+    /// be done by the IotHubClient.
     /// The recommended call frequency is at least once every 100 milliseconds.
     ///
-    /// See IoTHubDeviceClient_LL_DoWork)_
+    /// See IotHubDeviceClientLL_DoWork)_
     pub fn do_work(&self) {
         unsafe { iothub_device_client_ll::IoTHubDeviceClient_LL_DoWork(self.handle) };
     }
 
-    /// Helper function on top of IoTHubDeviceClient_LL_SetOption()
+    /// Helper function on top of IotHubDeviceClientLL_SetOption()
     unsafe fn set_option_internal(
         // unsafe because it consumes unsafe types
         &self,
@@ -535,8 +529,8 @@ impl IotHubDeviceClient {
         Self::map_client_result(result)
     }
 
-    /// Helper function on top of IoTHubDeviceClient_LL_SetOption()
-    // IoTHubDeviceClient_LL_SetOption is polymorphic, so we use generics to support many options
+    /// Helper function on top of IotHubDeviceClientLL_SetOption()
+    // IotHubDeviceClientLL_SetOption is polymorphic, so we use generics to support many options
     // It is unsafe because the option string and value type must match
     // See https://github.com/Azure/azure-iot-sdk-c/blob/main/doc/Iothub_sdk_options.md
     pub unsafe fn set_option<T>(&self, option: &str, value: T) -> Result<(), ClientResult> {
@@ -549,7 +543,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_LOG_TRACE/PROV_OPTION_LOG_TRACE (bool*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_LOG_TRACE/PROV_OPTION_LOG_TRACE (bool*)
     pub fn set_option_log_trace(&self, value: bool) -> Result<(), ClientResult> {
         unsafe {
             let value = if value { 1u8 } else { 0u8 };
@@ -560,7 +554,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for PROV_REGISTRATION_ID (const char*)
+    /// IotHubDeviceClientLL_SetOption for PROV_REGISTRATION_ID (const char*)
     pub fn set_option_registration_id(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -571,7 +565,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for PROV_OPTION_TIMEOUT (long*)
+    /// IotHubDeviceClientLL_SetOption for PROV_OPTION_TIMEOUT (long*)
     pub fn set_option_timeout(&self, value: usize) -> Result<(), ClientResult> {
         unsafe {
             self.set_option_internal(
@@ -581,7 +575,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_X509_CERT (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_X509_CERT (const char*)
     pub fn set_option_x509_cert(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -592,7 +586,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_X509_PRIVATE_KEY (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_X509_PRIVATE_KEY (const char*)
     pub fn set_option_x509_private_key(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -603,7 +597,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_KEEP_ALIVE (int*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_KEEP_ALIVE (int*)
     pub fn set_option_keep_alive(&self, value: i32) -> Result<(), ClientResult> {
         unsafe {
             self.set_option_internal(
@@ -613,7 +607,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_CONNECTION_TIMEOUT (int*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_CONNECTION_TIMEOUT (int*)
     pub fn set_option_connection_timeout(&self, value: i32) -> Result<(), ClientResult> {
         unsafe {
             self.set_option_internal(
@@ -623,7 +617,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
     pub fn set_option_sas_token_lifetime(&self, value: usize) -> Result<(), ClientResult> {
         unsafe {
             self.set_option_internal(
@@ -633,9 +627,9 @@ impl IotHubDeviceClient {
         }
     }
 
-    // deprecated: IoTHubDeviceClient_LL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
+    // deprecated: IotHubDeviceClientLL_SetOption for OPTION_SAS_TOKEN_LIFETIME (size_t*)
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_PRODUCT_INFO (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_PRODUCT_INFO (const char*)
     pub fn set_option_product_info(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -646,7 +640,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_MODEL_ID (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_MODEL_ID (const char*)
     pub fn set_option_model_id(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -657,7 +651,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_AUTO_URL_ENCODE_DECODE (bool*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_AUTO_URL_ENCODE_DECODE (bool*)
     pub fn set_option_auto_url_encode_decode(&self, value: bool) -> Result<(), ClientResult> {
         unsafe {
             let value = if value { 1u8 } else { 0u8 };
@@ -668,9 +662,9 @@ impl IotHubDeviceClient {
         }
     }
 
-    // deprecated: IoTHubDeviceClient_LL_SetOption for OPTION_MESSAGE_TIMEOUT
+    // deprecated: IotHubDeviceClientLL_SetOption for OPTION_MESSAGE_TIMEOUT
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_HTTP_PROXY (HTTP_PROXY_OPTIONS*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_HTTP_PROXY (HTTP_PROXY_OPTIONS*)
     pub fn option_set_http_proxy(&self, value: &HttpProxyOptions) -> Result<(), ClientResult> {
         let port = value.port as i32;
         unsafe {
@@ -701,7 +695,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_TRUSTED_CERT (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_TRUSTED_CERT (const char*)
     pub fn option_set_trusted_cert(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -712,7 +706,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_X509_ECC_CERT (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_X509_ECC_CERT (const char*)
     pub fn option_set_x509_ecc_cert(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -723,7 +717,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_X509_ECC_KEY (const char*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_X509_ECC_KEY (const char*)
     pub fn option_set_x509_ecc_key(&self, value: &str) -> Result<(), ClientResult> {
         unsafe {
             let value = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -734,7 +728,7 @@ impl IotHubDeviceClient {
         }
     }
 
-    /// IoTHubDeviceClient_LL_SetOption for OPTION_TLS_VERSION (int*)
+    /// IotHubDeviceClientLL_SetOption for OPTION_TLS_VERSION (int*)
     pub fn option_tls_version(&self, value: i32) -> Result<(), ClientResult> {
         unsafe {
             self.set_option_internal(
@@ -744,12 +738,14 @@ impl IotHubDeviceClient {
         }
     }
 
-    unsafe extern "C" fn device_twin_callback_wrapper(
+    unsafe extern "C" fn device_twin_callback_wrapper<F>(
         update_state: iothub_device_client_ll::DEVICE_TWIN_UPDATE_STATE,
         payload: *const libc::c_uchar,
         size: usize,
         user_context_callback: *mut libc::c_void,
-    ) {
+    ) where
+        F: FnMut(DeviceTwinUpdateState, Vec<u8>),
+    {
         let payload = std::slice::from_raw_parts(payload, size);
         let update_state = match update_state {
             iothub_device_client_ll::DEVICE_TWIN_UPDATE_STATE_TAG_DEVICE_TWIN_UPDATE_COMPLETE => {
@@ -757,75 +753,81 @@ impl IotHubDeviceClient {
             }
             _ => DeviceTwinUpdateState::Partial,
         };
-        let callback = (user_context_callback as *mut DeviceTwinCallback)
-            .as_mut()
-            .unwrap();
+        let callback = &mut *(user_context_callback as *mut F);
         callback(update_state, payload.to_vec());
     }
 
     /// This API specifies a callback to be used when the device receives a desired state update.
-    /// See IoTHubDeviceClient_LL_SetDeviceTwinCallback()
-    pub fn set_device_twin_callback(
+    /// See IotHubDeviceClientLL_SetDeviceTwinCallback()
+    pub fn set_device_twin_callback<F>(
         &self,
-        callback: DeviceTwinCallback, // BUGBUG: this should be Option()
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+        callback: F, // BUGBUG: this should be Option()
+    ) -> Result<(), ClientResult>
+    where
+        F: FnMut(DeviceTwinUpdateState, Vec<u8>),
+    {
+        let mut context = callback;
 
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceTwinCallback(
                 self.handle,
-                Some(Self::device_twin_callback_wrapper),
-                context as _,
+                Some(Self::device_twin_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
     }
 
-    unsafe extern "C" fn reported_state_callback_wrapper(
+    unsafe extern "C" fn reported_state_callback_wrapper<F>(
         status_code: libc::c_int,
         user_context_callback: *mut libc::c_void,
-    ) {
-        let callback = (user_context_callback as *mut ReportedStateCallback)
-            .as_mut()
-            .unwrap();
-        callback(status_code);
+    ) where
+        F: FnMut(ConnectionStatusReason),
+    {
+        let callback = &mut *(user_context_callback as *mut F);
+        let status_code = Self::map_connection_status(status_code as u32);
+        (*callback)(status_code);
     }
 
     /// This API sends a report of the device's properties and their current values.
     ///
-    /// See IoTHubDeviceClient_LL_SendReportedState()
-    pub fn send_reported_state(
+    /// See IotHubDeviceClientLL_SendReportedState()
+    pub fn send_reported_state<F>(
         &self,
         reported_state: &[u8],
-        callback: ReportedStateCallback, // BUGBUG: this should be Option()
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+        callback: F, // BUGBUG: this should be Option()
+    ) -> Result<(), ClientResult>
+    where
+        F: FnMut(ConnectionStatusReason),
+    {
+        let mut context = callback;
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SendReportedState(
                 self.handle,
                 reported_state.as_ptr(),
                 reported_state.len(),
-                Some(Self::reported_state_callback_wrapper),
-                context as _,
+                Some(Self::reported_state_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
     }
 
-    unsafe extern "C" fn device_method_callback_wrapper(
+    unsafe extern "C" fn device_method_callback_wrapper<F>(
         method_name: *const libc::c_char,
         payload: *const libc::c_uchar,
         size: usize,
         response: *mut *mut libc::c_uchar,
         response_size: *mut usize,
         user_context_callback: *mut libc::c_void,
-    ) -> libc::c_int {
+    ) -> libc::c_int
+    where
+        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+    {
         let method_name = std::ffi::CStr::from_ptr(method_name);
         let payload = slice::from_raw_parts(payload, size).to_vec();
 
-        let callback = (user_context_callback as *mut DeviceMethodCallback)
-            .as_mut()
-            .unwrap();
+        let callback = &mut *(user_context_callback as *mut F);
         let (response_code, response_data) = callback(&method_name, &payload);
 
         // `response` must be memory allocated via C malloc() and doesn't need to be null-terminated
@@ -843,26 +845,29 @@ impl IotHubDeviceClient {
 
     /// This API sets the callback for async cloud to device method calls.
     ///
-    /// See IoTHubDeviceClient_LL_SetDeviceMethodCallback()
-    pub fn set_device_method_callback(
+    /// See IotHubDeviceClientLL_SetDeviceMethodCallback()
+    pub fn set_device_method_callback<F>(
         &self,
-        callback: DeviceMethodCallback, // BUGBUG: this should be Option()
-    ) -> Result<(), ClientResult> {
-        let context = Box::into_raw(callback);
+        callback: F, // BUGBUG: this should be Option()
+    ) -> Result<(), ClientResult>
+    where
+        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+    {
+        let mut context = callback;
         let result = unsafe {
             iothub_device_client_ll::IoTHubDeviceClient_LL_SetDeviceMethodCallback(
                 self.handle,
-                Some(Self::device_method_callback_wrapper),
-                context as _,
+                Some(Self::device_method_callback_wrapper::<F>),
+                &mut context as *mut _ as *mut std::ffi::c_void,
             )
         };
         Self::map_client_result(result)
     }
 
-    // IoTHubDeviceClient_LL_DeviceMethodResponse() is deprecated.
+    // IotHubDeviceClientLL_DeviceMethodResponse() is deprecated.
 }
 
-impl Drop for IotHubDeviceClient {
+impl Drop for IotHubDeviceClientLowLevel {
     fn drop(&mut self) {
         let _ = unsafe { iothub_device_client_ll::IoTHubDeviceClient_LL_Destroy(self.handle) };
     }

@@ -1,31 +1,19 @@
-use crate::azureiot::AzureIoT;
-use crate::azureiot::{Callbacks, FailureCallback, IoTResult};
+use crate::azureiot::{AzureIoT, AzureIoTEvent, FailureReason, IoTResult};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use std::cell::RefCell;
 use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
 
-pub trait CloudCallbacks {
-    fn telemetry_upload_enabled_change(&mut self, status: bool, from_cloud: bool) {
-        azs::debug!("WARNING: Cloud - no handler registered for TelemetryUploadEnabled - status {:?} from_cloud {:?}\n", status, from_cloud);
-    }
-
-    fn display_alert(&mut self, message: String) {
-        azs::debug!(
-            "WARNING: Cloud - no handler registered for DisplayAlert - message {:?}\n",
-            message
-            );        
-    }
-
-    fn connection_change(&mut self, connected: bool) {
-        azs::debug!(
-            "WARNING: Cloud - no handler registered for ConnectionChanged - connected {:?}\n",
-            connected
-        );
-    }
-
+#[derive(Debug)]
+pub enum CloudEvent {
+    Failure(FailureReason),
+    TelemetryUploadEnabledChanged(bool),
+    Telemetry(Telemetry),
+    Alert(String),
+    ConnectionChanged(bool),
 }
 
 #[derive(Debug)]
@@ -39,14 +27,14 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub struct Cloud<'a> {
+pub struct Cloud {
     last_acked_version: u32,
     date_time_buffer: String,
-    cloud_callbacks: &'a mut dyn CloudCallbacks,
     azureiot: AzureIoT,
+    events: RefCell<Vec<CloudEvent>>,
 }
 
-impl<'a> IoCallback for Cloud<'a> {
+impl IoCallback for Cloud {
     fn event(&mut self, events: IoEvents) {
         self.azureiot.event(events)
     }
@@ -64,45 +52,53 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl<'a> Cloud<'a> {
-    pub fn initialize(
-        failure_callback: FailureCallback,
-        cloud_callbacks: &'a mut dyn CloudCallbacks
-    ) -> Result<Self, std::io::Error> {
+impl Cloud {
+    pub fn new() -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
-        let connection_changed_callback = Box::new(Self::default_connection_change_callback);
-
-        let callbacks = Callbacks {
-            connection_status: Some(connection_changed_callback),
-            device_twin_received: None,
-            device_twin_report_state_ack: None,
-            send_telemetry: None,
-            device_method: None,
-            cloud_to_device: None,
-        };
-
-        let mut azureiot = AzureIoT::new(String::from(MODEL_ID), failure_callback, callbacks)?;
-        azureiot.initialize()?;
+        let azureiot = AzureIoT::new(String::from(MODEL_ID))?;
 
         Ok(Self {
             last_acked_version,
             date_time_buffer,
-            cloud_callbacks,
             azureiot,
+            events: RefCell::new(Vec::<CloudEvent>::new()),
         })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
-        self.cloud_callbacks.display_alert(String::from("Hello from Cloud::test()"));
-        self.azureiot.test()
-    }
-
-    fn default_connection_change_callback(_connected: bool) {
-        // bugbug:
-        //self.cloud_callbacks.connection_change(connected);
+        self.azureiot.test();
+        let events = self.do_work();
+        for event in events.iter() {
+            match event {
+                CloudEvent::Failure(reason) => {
+                    azs::debug!("Cloud::test() - CloudEvent::Failure({:?})\n", reason);
+                }
+                CloudEvent::TelemetryUploadEnabledChanged(status) => {
+                    azs::debug!(
+                        "Cloud::test() - CloudEvent::TelemetryUploadEnabledChanged({:?})\n",
+                        status
+                    );
+                }
+                CloudEvent::Telemetry(telemetry) => {
+                    azs::debug!(
+                        "Cloud::test() - CloudEvent::Telemetry({:?})\n",
+                        telemetry.temperature
+                    );
+                }
+                CloudEvent::Alert(message) => {
+                    azs::debug!("Cloud::test() - CloudEvent::Alert({:?})\n", message);
+                }
+                CloudEvent::ConnectionChanged(connected) => {
+                    azs::debug!(
+                        "Cloud::test() - CloudEvent::ConnectionChanged({:?})\n",
+                        connected
+                    );
+                }
+            }
+        }
     }
 
     pub fn build_utc_datetime(t: SystemTime) -> String {
@@ -147,5 +143,23 @@ impl<'a> Cloud<'a> {
             .azureiot
             .send_telemetry(serialized_telemetry, utc_datetime);
         azureiot_to_cloud_result(result)
+    }
+
+    pub fn do_work(&self) -> Vec<CloudEvent> {
+        let iot_events = self.azureiot.do_work();
+        for event in iot_events.iter() {
+            // Process each event
+            match event {
+                AzureIoTEvent::Failure(reason) => {
+                    azs::debug!("INFO: Azure IoT Hub failure message received.\n");
+                    let event = CloudEvent::Failure(*reason);
+                    self.events.borrow_mut().push(event);
+                }
+                _ => {} // bugbug: finish filling this out
+            }
+        }
+
+        let empty_vec = Vec::<CloudEvent>::new();
+        self.events.replace(empty_vec) // Replace current list with empty, and return current list
     }
 }

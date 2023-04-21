@@ -43,7 +43,7 @@ pub enum ProvReturnValue {
     GenericError
 }
 
-/// IoTHubDeviceClient_LL_CreateWithAzureSphereDeviceAuthProvisioning
+/// IotHubDeviceClient_LL_CreateWithAzureSphereDeviceAuthProvisioning
 /// Provisions the Azure Sphere device using the provisioning service
 /// specified by id_scope and creates an IoT hub connection handle.
 /// 
@@ -55,7 +55,7 @@ pub enum ProvReturnValue {
 pub fn create_with_device_auth_provisioning(
     id_scope: &str,
     timeout: libc::c_uint
-    ) -> Result<iothub_device_client_ll::IotHubDeviceClient, ProvReturnValue>
+    ) -> Result<iothub_device_client_ll::IotHubDeviceClientLowLevel, ProvReturnValue>
 {
     let id_scope_native = std::ffi::CString::new(id_scope.as_bytes()).unwrap();
     let mut handle:u32 = 0;
@@ -68,7 +68,7 @@ pub fn create_with_device_auth_provisioning(
     };
     match result.result {
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_OK => unsafe {
-            Ok(iothub_device_client_ll::IotHubDeviceClient::from_handle(handle))
+            Ok(iothub_device_client_ll::IotHubDeviceClientLowLevel::from_handle(handle))
         },
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_INVALID_PARAM => Err(ProvReturnValue::InvalidParam),
         azure_sphere_provisioning::AZURE_SPHERE_PROV_RESULT_AZURE_SPHERE_PROV_RESULT_NETWORK_NOT_READY => Err(ProvReturnValue::NetworkNotReady),
@@ -108,7 +108,7 @@ pub fn create_with_device_auth_provisioning(
 }
 
 
-/// IoTHubDeviceClient_LL_CreateWithAzureSphereFromDeviceAuth
+/// IotHubDeviceClient_LL_CreateWithAzureSphereFromDeviceAuth
 /// Creates an IoT hub connection handle using Azure Sphere device authentication with
 /// the provided IoT Hub URI using the specified protocol.
 /// 
@@ -119,7 +119,7 @@ pub fn create_with_device_auth_provisioning(
 ///  * `iothub_uri` - The Azure IoT Hub URI received in the DPS registration process.
 ///  * `protocol` - Function pointer for protocol implementation
 /// 
-pub fn create_from_device_auth(iothub_uri: &str, protocol:iothub_device_client_ll::TransportProvider) -> Result<iothub_device_client_ll::IotHubDeviceClient, std::io::Error>
+pub fn create_from_device_auth(iothub_uri: &str, protocol:iothub_device_client_ll::TransportProvider) -> Result<iothub_device_client_ll::IotHubDeviceClientLowLevel, std::io::Error>
 {
     let iothub_uri_native = std::ffi::CString::new(iothub_uri.as_bytes()).unwrap();
     unsafe {
@@ -134,7 +134,7 @@ pub fn create_from_device_auth(iothub_uri: &str, protocol:iothub_device_client_l
         if handle == 0 {
             Err(std::io::Error::from_raw_os_error(libc::EINVAL))
         } else {
-            Ok(iothub_device_client_ll::IotHubDeviceClient::from_handle(handle))
+            Ok(iothub_device_client_ll::IotHubDeviceClientLowLevel::from_handle(handle))
         }
     }
 }

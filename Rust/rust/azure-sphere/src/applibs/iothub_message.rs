@@ -1,4 +1,4 @@
-//! The IoTHub_Message component encapsulates one message that
+//! The IotHub_Message component encapsulates one message that
 //! can be transferred by an IoT hub client.
 
 use azure_sphere_sys::applibs::iothub_device_client_ll;
@@ -55,8 +55,8 @@ fn map_message_result_to_result(result: u32) -> Result<(), MessageResult> {
     }
 }
 
-/// Wrapper for IoTHubMessage_* functions.
-/// This is a Trait to support both IoTHubMessage and IotHubMessageRef,
+/// Wrapper for IotHubMessage_* functions.
+/// This is a Trait to support both IotHubMessage and IotHubMessageRef,
 /// as C-to-Rust callbacks returns a reference to an existing message.
 pub trait IotHubMessageBase {
     /// Get the underlying IOTHUB_MESSAGE_HANDLE
@@ -68,7 +68,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetByteArray().
+    /// See IotHubMessage_GetByteArray().
     fn get_bytes(&self) -> Result<Vec<u8>, MessageResult> {
         let mut buffer: *const libc::c_uchar = std::ptr::null_mut();
         let mut size: usize = 0;
@@ -97,7 +97,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetString()
+    /// See IotHubMessage_GetString()
     fn get_string(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -113,7 +113,7 @@ pub trait IotHubMessageBase {
 
     /// Returns the content type of the message
     ///
-    /// See IoTHubMessage_GetContentType()
+    /// See IotHubMessage_GetContentType()
     fn get_content_type(&self) -> ContentType {
         let result =
             unsafe { iothub_device_client_ll::IoTHubMessage_GetContentType(self.get_handle()) };
@@ -130,7 +130,7 @@ pub trait IotHubMessageBase {
 
     /// Sets the content-type of the message payload, as per supported values on RFC 2046.
     ///
-    /// See IoTHubMessage_SetContentTypeSystemProperty()
+    /// See IotHubMessage_SetContentTypeSystemProperty()
     fn set_content_type_system_property(&self, content_type: &str) -> Result<(), MessageResult> {
         let content_type_native = std::ffi::CString::new(content_type.as_bytes()).unwrap();
         let result = unsafe {
@@ -146,7 +146,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetContentTypeSystemProperty()
+    /// See IotHubMessage_GetContentTypeSystemProperty()
     fn get_content_type_system_property(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -162,7 +162,7 @@ pub trait IotHubMessageBase {
 
     /// Sets the content-encoding of the message payload, as per supported values on RFC 2616.
     ///
-    /// See IoTHubMessage_SetContentEncodingSystemProperty()
+    /// See IotHubMessage_SetContentEncodingSystemProperty()
     fn set_content_encoding_system_property(
         &self,
         content_type: &str,
@@ -181,7 +181,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetContentEncodingSystemProperty()
+    /// See IotHubMessage_GetContentEncodingSystemProperty()
     fn get_content_encoding_system_property(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -199,7 +199,7 @@ pub trait IotHubMessageBase {
 
     /// Sets a property on a Iothub Message.
     ///
-    /// See IoTHubMessage_SetProperty()
+    /// See IotHubMessage_SetProperty()
     fn set_property(&self, name: &str, value: &str) -> Result<(), MessageResult> {
         let name_native = std::ffi::CString::new(name.as_bytes()).unwrap();
         let value_native = std::ffi::CString::new(value.as_bytes()).unwrap();
@@ -217,7 +217,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetProperty()
+    /// See IotHubMessage_GetProperty()
     fn get_property(&self, name: &str) -> Result<String, ()> {
         let name_native = std::ffi::CString::new(name.as_bytes()).unwrap();
         let result = unsafe {
@@ -239,7 +239,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetMessageId()
+    /// See IotHubMessage_GetMessageId()
     fn get_message_id(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -255,7 +255,7 @@ pub trait IotHubMessageBase {
 
     /// Sets the MessageId for the message.
     ///
-    /// See IoTHubMessage_SetMessageId()
+    /// See IotHubMessage_SetMessageId()
     fn set_message_id(&self, message_id: &str) -> Result<(), MessageResult> {
         let message_id_native = std::ffi::CString::new(message_id.as_bytes()).unwrap();
         let result = unsafe {
@@ -271,7 +271,7 @@ pub trait IotHubMessageBase {
     ///
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
-    /// See IoTHubMessage_GetCorrelationId()
+    /// See IotHubMessage_GetCorrelationId()
     fn get_correlation_id(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -287,7 +287,7 @@ pub trait IotHubMessageBase {
 
     /// Sets the CorrelationId for the message
     ///
-    /// See IoTHubMessage_SetCorrelationId()
+    /// See IotHubMessage_SetCorrelationId()
     fn set_correlation_id(&self, correlation_id: &str) -> Result<(), MessageResult> {
         let correlation_id_native = std::ffi::CString::new(correlation_id.as_bytes()).unwrap();
         let result = unsafe {
@@ -317,7 +317,7 @@ impl IotHubMessage {
     /// Creates a new IoT hub message from a byte array.  The type will be
     /// ContentType::ByteArray.
     ///
-    /// See IoTHubMessage_CreateFromByteArray()
+    /// See IotHubMessage_CreateFromByteArray()
     pub fn from_bytearray(byte_array: &[u8]) -> Result<Self, ()> {
         let handle = unsafe {
             iothub_device_client_ll::IoTHubMessage_CreateFromByteArray(
@@ -335,7 +335,7 @@ impl IotHubMessage {
     /// Creates a new IoT hub message from a string.  The type will be
     /// ContentType::String.
     ///
-    /// See IoTHubMessage_CreateFromString()
+    /// See IotHubMessage_CreateFromString()
     pub fn from_string(source: &str) -> Result<Self, ()> {
         let source_native = std::ffi::CString::new(source.as_bytes()).unwrap();
         let handle = unsafe {
@@ -352,7 +352,7 @@ impl IotHubMessage {
 
     /// Creates a new IoT hub message with the content identical to the current message.
     ///
-    /// See IoTHubMessage_Clone()
+    /// See IotHubMessage_Clone()
     pub fn clone(&self) -> Result<Self, ()> {
         let handle = unsafe { iothub_device_client_ll::IoTHubMessage_Clone(self.get_handle()) };
         if handle == 0 {
@@ -385,7 +385,7 @@ impl IotHubMessageRef {
 
     /// Creates a new IoT hub message with the content identical to the current message.
     ///
-    /// See IoTHubMessage_Clone()
+    /// See IotHubMessage_Clone()
     pub fn clone(&self) -> Result<Self, ()> {
         let handle = unsafe { iothub_device_client_ll::IoTHubMessage_Clone(self.get_handle()) };
         if handle == 0 {
