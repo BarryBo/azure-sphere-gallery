@@ -4,14 +4,14 @@
 ///
 use crate::applibs::iothub_device_client_ll::{
     ClientResult, ClientRetryPolicy, ConfirmationResult, ConnectionStatus, ConnectionStatusReason,
-    DeviceTwinUpdateState, IotHubDeviceClientLowLevel,
+    DeviceTwinUpdateState, IotHubDeviceClientLowLevel, MessageDisposition,
 };
 use crate::applibs::iothub_message::IotHubMessage;
 use std::cell::RefCell;
 
 #[derive(Debug)]
 pub enum IotHubEvent {
-    EventConfirmation(/* IotHubMessage, */ ConfirmationResult), // bugbug: what should the payload really be?
+    EventConfirmation(ConfirmationResult, IotHubMessage),
     Message(IotHubMessage),
     ConnectionStatusChanged(ConnectionStatus, ConnectionStatusReason),
     DeviceTwinChanged(DeviceTwinUpdateState, Vec<u8>),
@@ -29,21 +29,37 @@ pub struct IotHubDeviceClient {
 }
 
 impl IotHubDeviceClient {
-    pub fn new(client_ll: IotHubDeviceClientLowLevel) -> Self {
-        IotHubDeviceClient {
+    pub fn new(client_ll: IotHubDeviceClientLowLevel) -> Result<Self, ClientResult> {
+        let result = IotHubDeviceClient {
             client: client_ll,
             events: RefCell::new(Vec::<IotHubEvent>::new()),
-        }
+        };
+        result.client.set_message_callback(|message| {
+            let event = IotHubEvent::Message(message);
+            result.events.borrow_mut().push(event);
+            // bugbug: no good way for the event-based system to
+            // know what disposition to use here.
+            MessageDisposition::Accepted
+        })?;
+        Ok(result)
     }
 
     // bugbug: bring over the set_option_* methods from iot_device_client.rs
 
     pub fn send_event(&self, event_message: IotHubMessage) -> Result<(), ClientResult> {
-        let callback = |confirmation_result| {
-            let event = IotHubEvent::EventConfirmation(confirmation_result);
-            self.events.borrow_mut().push(event);
-        };
-        self.client.send_event_async(&event_message, callback)
+        // bugbug: this is ugly.  The send_event_async() should use a callback that
+        // includes the IotHubMessage, but it's too difficult to fold that into the
+        // current generic-with-bounds style.
+        unsafe {
+            let event_message_handle = event_message.get_handle();
+
+            let callback = |confirmation_result| {
+                let new_event_message = IotHubMessage::from_handle(event_message_handle);
+                let event = IotHubEvent::EventConfirmation(confirmation_result, new_event_message);
+                self.events.borrow_mut().push(event);
+            };
+            self.client.send_event_async(event_message, callback)
+        }
     }
 
     pub fn set_retry_policy(

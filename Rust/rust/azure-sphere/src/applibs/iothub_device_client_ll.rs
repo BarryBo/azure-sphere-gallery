@@ -5,7 +5,6 @@
 //! and receive messages. At any given moment in time there can only
 //! be at most 1 message callback function.
 use crate::applibs::iothub_message;
-use crate::applibs::iothub_message::IotHubMessageBase;
 use azure_sphere_sys::applibs::azure_sphere_provisioning;
 use azure_sphere_sys::applibs::iothub_client_options;
 use azure_sphere_sys::applibs::iothub_device_client_ll;
@@ -291,17 +290,18 @@ impl IotHubDeviceClientLowLevel {
     /// See IotHubDeviceClientLL_SendEventAsync()
     pub fn send_event_async<F>(
         &self,
-        event_message: &iothub_message::IotHubMessage,
+        event_message: iothub_message::IotHubMessage,
         callback: F,
     ) -> Result<(), ClientResult>
     where
         F: FnMut(ConfirmationResult),
     {
-        let mut context = callback;
         let result = unsafe {
+            let event_message_handle = event_message.take_handle();
+            let mut context = callback;
             iothub_device_client_ll::IoTHubDeviceClient_LL_SendEventAsync(
                 self.handle,
-                event_message.get_handle(),
+                event_message_handle,
                 Some(Self::event_confirmation_callback_wrapper::<F>),
                 &mut context as *mut _ as *mut std::ffi::c_void,
             )
@@ -314,15 +314,15 @@ impl IotHubDeviceClientLowLevel {
         user_context_callback: *mut libc::c_void,
     ) -> iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT
     where
-        F: FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition,
+        F: FnMut(iothub_message::IotHubMessage) -> MessageDisposition,
     {
         let callback = &mut *(user_context_callback as *mut F);
 
         // BUGBUG: it would be simpler if IotHubMessageRef was removed, and IotHubMessage
         // became a true struct again.  Ignore the message ID here completely, trusting that
         // the caller will hold onto the IotHubMessage in its closure.
-        let message = &iothub_message::IotHubMessageRef::from_handle(message);
-        let result = callback(&message);
+        let message = iothub_message::IotHubMessage::from_handle(message);
+        let result = callback(message);
         match result {
             MessageDisposition::Abandoned => {
                 iothub_device_client_ll::IOTHUBMESSAGE_DISPOSITION_RESULT_TAG_IOTHUBMESSAGE_ABANDONED
@@ -342,7 +342,7 @@ impl IotHubDeviceClientLowLevel {
     /// See IotHubDeviceClientLL_SetMessageCallback()
     pub fn set_message_callback<F>(&self, callback: F) -> Result<(), ClientResult>
     where
-        F: FnMut(&iothub_message::IotHubMessageRef) -> MessageDisposition,
+        F: FnMut(iothub_message::IotHubMessage) -> MessageDisposition,
     {
         let mut context = callback;
         let result = unsafe {

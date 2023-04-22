@@ -2,6 +2,7 @@
 //! can be transferred by an IoT hub client.
 
 use azure_sphere_sys::applibs::iothub_device_client_ll;
+use std::cell::RefCell;
 
 /// Enumeration specifying the status of calls to various APIs in this module
 /// See IOTHUB_MESSAGE_RESULT enum
@@ -55,13 +56,14 @@ fn map_message_result_to_result(result: u32) -> Result<(), MessageResult> {
     }
 }
 
-/// Wrapper for IotHubMessage_* functions.
-/// This is a Trait to support both IotHubMessage and IotHubMessageRef,
-/// as C-to-Rust callbacks returns a reference to an existing message.
-pub trait IotHubMessageBase {
-    /// Get the underlying IOTHUB_MESSAGE_HANDLE
-    unsafe fn get_handle(&self) -> u32;
+/// An IOT_HUB_MESSAGE wrapper
+#[derive(Debug)]
+pub struct IotHubMessage {
+    handle: RefCell<u32>,
+}
 
+/// Wrapper for IotHubMessage_* functions.
+impl IotHubMessage {
     /// Fetches a pointer and size for the data associated with the IoT
     /// hub message handle. If the content type of the message is not
     /// ContentType::ByteArray then the error is MessageResult::InvalidArg
@@ -69,7 +71,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetByteArray().
-    fn get_bytes(&self) -> Result<Vec<u8>, MessageResult> {
+    pub fn get_bytes(&self) -> Result<Vec<u8>, MessageResult> {
         let mut buffer: *const libc::c_uchar = std::ptr::null_mut();
         let mut size: usize = 0;
         let result = unsafe {
@@ -98,7 +100,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetString()
-    fn get_string(&self) -> Result<String, ()> {
+    pub fn get_string(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
             iothub_device_client_ll::IoTHubMessage_GetString(self.get_handle())
@@ -114,7 +116,7 @@ pub trait IotHubMessageBase {
     /// Returns the content type of the message
     ///
     /// See IotHubMessage_GetContentType()
-    fn get_content_type(&self) -> ContentType {
+    pub fn get_content_type(&self) -> ContentType {
         let result =
             unsafe { iothub_device_client_ll::IoTHubMessage_GetContentType(self.get_handle()) };
         match result {
@@ -131,7 +133,10 @@ pub trait IotHubMessageBase {
     /// Sets the content-type of the message payload, as per supported values on RFC 2046.
     ///
     /// See IotHubMessage_SetContentTypeSystemProperty()
-    fn set_content_type_system_property(&self, content_type: &str) -> Result<(), MessageResult> {
+    pub fn set_content_type_system_property(
+        &self,
+        content_type: &str,
+    ) -> Result<(), MessageResult> {
         let content_type_native = std::ffi::CString::new(content_type.as_bytes()).unwrap();
         let result = unsafe {
             iothub_device_client_ll::IoTHubMessage_SetContentTypeSystemProperty(
@@ -147,7 +152,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetContentTypeSystemProperty()
-    fn get_content_type_system_property(&self) -> Result<String, ()> {
+    pub fn get_content_type_system_property(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
             iothub_device_client_ll::IoTHubMessage_GetContentTypeSystemProperty(self.get_handle())
@@ -163,7 +168,7 @@ pub trait IotHubMessageBase {
     /// Sets the content-encoding of the message payload, as per supported values on RFC 2616.
     ///
     /// See IotHubMessage_SetContentEncodingSystemProperty()
-    fn set_content_encoding_system_property(
+    pub fn set_content_encoding_system_property(
         &self,
         content_type: &str,
     ) -> Result<(), MessageResult> {
@@ -182,7 +187,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetContentEncodingSystemProperty()
-    fn get_content_encoding_system_property(&self) -> Result<String, ()> {
+    pub fn get_content_encoding_system_property(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
             iothub_device_client_ll::IoTHubMessage_GetContentEncodingSystemProperty(
@@ -200,7 +205,7 @@ pub trait IotHubMessageBase {
     /// Sets a property on a Iothub Message.
     ///
     /// See IotHubMessage_SetProperty()
-    fn set_property(&self, name: &str, value: &str) -> Result<(), MessageResult> {
+    pub fn set_property(&self, name: &str, value: &str) -> Result<(), MessageResult> {
         let name_native = std::ffi::CString::new(name.as_bytes()).unwrap();
         let value_native = std::ffi::CString::new(value.as_bytes()).unwrap();
         let result = unsafe {
@@ -218,7 +223,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetProperty()
-    fn get_property(&self, name: &str) -> Result<String, ()> {
+    pub fn get_property(&self, name: &str) -> Result<String, ()> {
         let name_native = std::ffi::CString::new(name.as_bytes()).unwrap();
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
@@ -240,7 +245,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetMessageId()
-    fn get_message_id(&self) -> Result<String, ()> {
+    pub fn get_message_id(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
             iothub_device_client_ll::IoTHubMessage_GetMessageId(self.get_handle())
@@ -256,7 +261,7 @@ pub trait IotHubMessageBase {
     /// Sets the MessageId for the message.
     ///
     /// See IotHubMessage_SetMessageId()
-    fn set_message_id(&self, message_id: &str) -> Result<(), MessageResult> {
+    pub fn set_message_id(&self, message_id: &str) -> Result<(), MessageResult> {
         let message_id_native = std::ffi::CString::new(message_id.as_bytes()).unwrap();
         let result = unsafe {
             iothub_device_client_ll::IoTHubMessage_SetMessageId(
@@ -272,7 +277,7 @@ pub trait IotHubMessageBase {
     /// Unlike the C SDK, this creates a copy of the underlying buffer.
     ///
     /// See IotHubMessage_GetCorrelationId()
-    fn get_correlation_id(&self) -> Result<String, ()> {
+    pub fn get_correlation_id(&self) -> Result<String, ()> {
         let result = unsafe {
             // Returns a shallow copy of the data.  Do not free it.
             iothub_device_client_ll::IoTHubMessage_GetCorrelationId(self.get_handle())
@@ -288,7 +293,7 @@ pub trait IotHubMessageBase {
     /// Sets the CorrelationId for the message
     ///
     /// See IotHubMessage_SetCorrelationId()
-    fn set_correlation_id(&self, correlation_id: &str) -> Result<(), MessageResult> {
+    pub fn set_correlation_id(&self, correlation_id: &str) -> Result<(), MessageResult> {
         let correlation_id_native = std::ffi::CString::new(correlation_id.as_bytes()).unwrap();
         let result = unsafe {
             iothub_device_client_ll::IoTHubMessage_SetCorrelationId(
@@ -298,22 +303,17 @@ pub trait IotHubMessageBase {
         };
         map_message_result_to_result(result)
     }
-}
 
-/// An IOT_HUB_MESSAGE wrapper
-#[derive(Debug)]
-pub struct IotHubMessage {
-    handle: u32,
-}
-
-impl IotHubMessageBase for IotHubMessage {
-    /// Get the underlying IOTHUB_MESSAGE_HANDLE
-    unsafe fn get_handle(&self) -> u32 {
-        self.handle
+    pub unsafe fn get_handle(&self) -> u32 {
+        *self.handle.as_ptr()
     }
-}
 
-impl IotHubMessage {
+    pub(crate) unsafe fn from_handle(handle: u32) -> IotHubMessage {
+        IotHubMessage {
+            handle: RefCell::new(handle),
+        }
+    }
+
     /// Creates a new IoT hub message from a byte array.  The type will be
     /// ContentType::ByteArray.
     ///
@@ -328,7 +328,9 @@ impl IotHubMessage {
         if handle == 0 {
             Err(())
         } else {
-            Ok(Self { handle })
+            Ok(Self {
+                handle: RefCell::new(handle),
+            })
         }
     }
 
@@ -346,7 +348,9 @@ impl IotHubMessage {
         if handle == 0 {
             Err(())
         } else {
-            Ok(Self { handle })
+            Ok(Self {
+                handle: RefCell::new(handle),
+            })
         }
     }
 
@@ -358,46 +362,22 @@ impl IotHubMessage {
         if handle == 0 {
             Err(())
         } else {
-            Ok(Self { handle })
+            Ok(Self {
+                handle: RefCell::new(handle),
+            })
         }
+    }
+
+    pub(crate) unsafe fn take_handle(&self) -> u32 {
+        self.handle.take()
     }
 }
 
 impl Drop for IotHubMessage {
     /// Free the underlying message
     fn drop(&mut self) {
-        let _ = unsafe { iothub_device_client_ll::IoTHubMessage_Destroy(self.handle) };
-    }
-}
-
-// An IotHubMessageRef is same as an IotHubMessage except that it doesn't implement Drop
-/// A reference to an IotHubMessage
-#[derive(Debug)]
-pub struct IotHubMessageRef {
-    handle: u32,
-}
-
-impl IotHubMessageRef {
-    /// Create a ref from a C IOTHUB_MESSAGE_HANDLE
-    pub(crate) unsafe fn from_handle(handle: u32) -> IotHubMessageRef {
-        IotHubMessageRef { handle }
-    }
-
-    /// Creates a new IoT hub message with the content identical to the current message.
-    ///
-    /// See IotHubMessage_Clone()
-    pub fn clone(&self) -> Result<Self, ()> {
-        let handle = unsafe { iothub_device_client_ll::IoTHubMessage_Clone(self.get_handle()) };
-        if handle == 0 {
-            Err(())
-        } else {
-            Ok(Self { handle })
-        }
-    }
-}
-
-impl IotHubMessageBase for IotHubMessageRef {
-    unsafe fn get_handle(&self) -> u32 {
-        self.handle
+        // This is safe to call even if self.handle == 0
+        let handle = self.handle.take();
+        let _ = unsafe { iothub_device_client_ll::IoTHubMessage_Destroy(handle) };
     }
 }
