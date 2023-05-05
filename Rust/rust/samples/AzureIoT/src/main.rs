@@ -36,6 +36,7 @@ use azs::applibs::eventloop::{EventLoop, IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
 use azs::applibs::networking;
 use azure_sphere as azs;
+use std::cell::RefCell;
 use std::env::args;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +46,7 @@ pub mod cloud;
 use crate::cloud::Cloud;
 pub mod azureiot;
 pub mod user_interface;
+use crate::azureiot::FailureReason;
 use crate::user_interface::UserInterface;
 use signal_hook_registry;
 
@@ -58,6 +60,7 @@ const STEP_INIT_UI: i32 = 6;
 const STEP_EVENTLOOP: i32 = 7;
 const STEP_CLOUD_INIT: i32 = 8;
 const STEP_FAILURE_CALLBACK: i32 = 9;
+const STEP_NETWORK_IS_READY_FAILED: i32 = 10;
 
 /// Currently executing program step
 static STEP: AtomicI32 = AtomicI32::new(STEP_SUCCESS);
@@ -94,7 +97,11 @@ fn hook_sigterm() -> Result<Arc<AtomicBool>, std::io::Error> {
 struct UserInterfaceContainer {
     ui: UserInterface,
     elt: eventloop_timer_utilities::EventLoopTimer,
-    telemetry_upload_enabled: bool,
+    // Fields accessed within callback closures must use RefCell<T> so that
+    // the closure borrows as immutable.  Otherwise only one closure may
+    // borrow mutable, and the others won't compile.
+    is_connected: RefCell<bool>,
+    telemetry_upload_enabled: RefCell<bool>,
 }
 
 impl IoCallback for UserInterfaceContainer {
@@ -102,7 +109,8 @@ impl IoCallback for UserInterfaceContainer {
         self.elt.consume_event().unwrap();
 
         if self.ui.button_a.is_pressed() {
-            let new_telemetry_upload_enabled = !self.telemetry_upload_enabled;
+            let telemetry_upload_enabled = self.telemetry_upload_enabled.borrow_mut();
+            let new_telemetry_upload_enabled = !*telemetry_upload_enabled;
             azs::debug!(
                 "INFO: Telemetry upload enabled state changed (via button press):{:?}\n",
                 new_telemetry_upload_enabled
@@ -128,12 +136,8 @@ impl UserInterfaceContainer {
         // bugbug: call Cloud_SendThermometerMovedEvent
     }
 
-    fn set_thermometer_telemetry_upload_enabled(
-        &mut self,
-        upload_enabled: bool,
-        _from_cloud: bool,
-    ) {
-        self.telemetry_upload_enabled = upload_enabled;
+    fn set_thermometer_telemetry_upload_enabled(&self, upload_enabled: bool, _from_cloud: bool) {
+        *self.telemetry_upload_enabled.borrow_mut() = upload_enabled;
         self.ui.set_status(upload_enabled);
         // bugbug: call Cloud_SendThermometerTelemetryUploadEnabledChangedEvent
     }
@@ -166,12 +170,56 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     let mut ui_container = UserInterfaceContainer {
         ui,
         elt,
-        telemetry_upload_enabled: false,
+        is_connected: RefCell::new(false),
+        telemetry_upload_enabled: RefCell::new(false),
     };
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
 
+    let exit_code_callback_handler = |reason: FailureReason| {
+        azs::debug!(
+            "exit_code_callback_handler in main(): reason={:?}\n",
+            reason
+        );
+        match reason {
+            FailureReason::NetworkingIsReadyFailed => {
+                set_step!(STEP_NETWORK_IS_READY_FAILED);
+            }
+        };
+        term.store(true, Ordering::SeqCst);
+    };
+
+    let connection_changed_callback_handler = |connected: bool| {
+        azs::debug!(
+            "connection_changed_callback_handler in main(): connected={:?}\n",
+            connected
+        );
+        *ui_container.telemetry_upload_enabled.borrow_mut() = connected;
+
+        if connected {
+            // bugbug: call Cloud_SendDeviceDetails(serialNumber)
+            azs::debug!("Main connection-changed callback!\n");
+        }
+    };
+
+    let thermometer_telemetry_upload_enabled_changed = |upload_enabled: bool, from_cloud: bool| {
+        azs::debug!(
+            "INFO: Thermometer telemetry upload enabled state changed (via cloud): {:?}\n",
+            upload_enabled
+        );
+        ui_container.set_thermometer_telemetry_upload_enabled(upload_enabled, from_cloud);
+    };
+
+    let display_alert = |alert_message: &str| {
+        azs::debug!("ALERT: {:?}\n", alert_message);
+    };
+
     set_step!(STEP_CLOUD_INIT);
-    let mut cloud = Cloud::new()?;
+    let mut cloud = Cloud::new(
+        exit_code_callback_handler,
+        thermometer_telemetry_upload_enabled_changed,
+        display_alert,
+        connection_changed_callback_handler,
+    )?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };

@@ -27,14 +27,30 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub struct Cloud {
+pub struct Cloud<FC, TU, DA, CC>
+where
+    FC: FnMut(FailureReason), // ExitCode_CallbackType
+    TU: FnMut(bool, bool),    // Cloud_TelemetryUploadEnabledChangedCallbackType
+    DA: FnMut(&str),          // Cloud_DisplayAlertCallbackType
+    CC: FnMut(bool),          // Cloud_ConnectionChangedCallbackType
+{
     last_acked_version: u32,
     date_time_buffer: String,
     azureiot: AzureIoT,
     events: RefCell<Vec<CloudEvent>>,
+    failure_callback: FC,
+    thermometer_telemetry_upload_enabled_changed: TU,
+    display_alert: DA,
+    connection_changed: CC,
 }
 
-impl IoCallback for Cloud {
+impl<FC, TU, DA, CC> IoCallback for Cloud<FC, TU, DA, CC>
+where
+    FC: FnMut(FailureReason),
+    TU: FnMut(bool, bool),
+    DA: FnMut(&str),
+    CC: FnMut(bool),
+{
     fn event(&mut self, events: IoEvents) {
         self.azureiot.event(events)
     }
@@ -52,8 +68,19 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl Cloud {
-    pub fn new() -> Result<Self, std::io::Error> {
+impl<FC, TU, DA, CC> Cloud<FC, TU, DA, CC>
+where
+    FC: FnMut(FailureReason),
+    TU: FnMut(bool, bool),
+    DA: FnMut(&str),
+    CC: FnMut(bool),
+{
+    pub fn new(
+        failure_callback: FC,
+        thermometer_telemetry_upload_enabled_changed: TU,
+        display_alert: DA,
+        connection_changed: CC,
+    ) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
@@ -64,11 +91,20 @@ impl Cloud {
             date_time_buffer,
             azureiot,
             events: RefCell::new(Vec::<CloudEvent>::new()),
+            failure_callback,
+            thermometer_telemetry_upload_enabled_changed,
+            display_alert,
+            connection_changed,
         })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
+        (self.connection_changed)(true);
+        (self.failure_callback)(FailureReason::NetworkingIsReadyFailed);
+        (self.thermometer_telemetry_upload_enabled_changed)(true, true);
+        (self.display_alert)("Test alert");
+
         self.azureiot.test();
         let events = self.do_work();
         for event in events.iter() {

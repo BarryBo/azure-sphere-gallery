@@ -181,6 +181,9 @@ impl AzureIoT {
         elt.set_period(connect_period)?;
         let connection = Connection::new(model_id);
 
+        // bugbug: call Connection_Initialize(ConnectionCallbackHandler) in connection_iot_hub or other implementations
+        // bugbug: need a second EventLoopTimer for azureIoTConnectionTimer, separate from the DoWork timer.
+
         Ok(Self {
             elt,
             connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
@@ -256,7 +259,21 @@ impl AzureIoT {
                     IotHubEvent::Message(_message) => {
                         azs::debug!("INFO: Azure IoT Hub message received.\n");
                     }
-                    _ => {} // bugbug: finish filling this out
+                    IotHubEvent::EventConfirmation(_result, _conf) => {
+                        azs::debug!("INFO: AzureIot Event Confirmation received.\n");
+                    }
+                    IotHubEvent::ConnectionStatusChanged(_status, _reason) => {
+                        azs::debug!("INFO: AzureIoT Connection status changed received.\n");
+                    }
+                    IotHubEvent::DeviceTwinChanged(_state, _vec) => {
+                        azs::debug!("INFO: Azure IoT Device Twin changed received.\n");
+                    }
+                    IotHubEvent::ReportedStateSent(_reason) => {
+                        azs::debug!("INFO: Azure IoT Reported state sent received.\n");
+                    }
+                    IotHubEvent::DeviceMethod(_str, _vec) => {
+                        azs::debug!("INFO: Azure IoT Device Method received.\n");
+                    }
                 }
             }
         }

@@ -11,11 +11,11 @@ use std::cell::RefCell;
 
 #[derive(Debug)]
 pub enum IotHubEvent {
-    EventConfirmation(ConfirmationResult, IotHubMessage),
-    Message(IotHubMessage),
+    EventConfirmation(ConfirmationResult, IotHubMessage), // Queued
+    Message(IotHubMessage),                               // Queued
     ConnectionStatusChanged(ConnectionStatus, ConnectionStatusReason),
-    DeviceTwinChanged(DeviceTwinUpdateState, Vec<u8>),
-    ReportedStateSent(ConnectionStatusReason),
+    DeviceTwinChanged(DeviceTwinUpdateState, Vec<u8>), // Queued
+    ReportedStateSent(ConnectionStatusReason),         // Queued
     DeviceMethod(std::ffi::CString, Vec<u8>),
 }
 
@@ -41,7 +41,27 @@ impl IotHubDeviceClient {
             // know what disposition to use here.
             MessageDisposition::Accepted
         })?;
+        result
+            .client
+            .set_device_twin_callback(|update_state, vec| {
+                let event = IotHubEvent::DeviceTwinChanged(update_state, vec);
+                result.events.borrow_mut().push(event);
+            })?;
+        //result.client.set_device_method_callback(|method, vec| {
+        //    let method = std::ffi::CString::new(Box::new(method));
+        //    let event = IotHubEvent::DeviceMethod(method, vec.clone());
+        //    result.events.borrow_mut().push(event);
+        //
+        //          (200, vec![0]) // bugbug: handle the return value
+        //})?;
         Ok(result)
+    }
+
+    pub fn set_device_method_callback<F>(&self, callback: F) -> Result<(), ClientResult>
+    where
+        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+    {
+        self.client.set_device_method_callback(callback)
     }
 
     // bugbug: bring over the set_option_* methods from iot_device_client.rs

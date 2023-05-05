@@ -828,7 +828,7 @@ impl IotHubDeviceClientLowLevel {
         let payload = slice::from_raw_parts(payload, size).to_vec();
 
         let callback = &mut *(user_context_callback as *mut F);
-        let (response_code, response_data) = callback(&method_name, &payload);
+        let (response_code, response_data) = callback(method_name, &payload);
 
         // `response` must be memory allocated via C malloc() and doesn't need to be null-terminated
         let response_native = libc::malloc(response_data.len());
