@@ -102,6 +102,7 @@ struct UserInterfaceContainer {
     // borrow mutable, and the others won't compile.
     is_connected: RefCell<bool>,
     telemetry_upload_enabled: RefCell<bool>,
+    term: Arc<AtomicBool>,
 }
 
 impl IoCallback for UserInterfaceContainer {
@@ -143,6 +144,48 @@ impl UserInterfaceContainer {
     }
 }
 
+impl crate::azureiot::FailureCallback for UserInterfaceContainer {
+    fn failure_callback(&mut self, reason: FailureReason) {
+        azs::debug!(
+            "exit_code_callback_handler in main(): reason={:?}\n",
+            reason
+        );
+        match reason {
+            FailureReason::NetworkingIsReadyFailed => {
+                set_step!(STEP_NETWORK_IS_READY_FAILED);
+            }
+        };
+        self.term.store(true, Ordering::SeqCst);
+    }
+}
+
+impl crate::cloud::Callbacks for UserInterfaceContainer {
+    fn connection_changed(&mut self, connected: bool) {
+        azs::debug!(
+            "connection_changed_callback_handler in main(): connected={:?}\n",
+            connected
+        );
+        *self.telemetry_upload_enabled.borrow_mut() = connected;
+
+        if connected {
+            // bugbug: call Cloud_SendDeviceDetails(serialNumber)
+            azs::debug!("Main connection-changed callback!\n");
+        }
+    }
+
+    fn telemetry_upload_enabled_changed(&mut self, upload_enabled: bool, from_cloud: bool) {
+        azs::debug!(
+            "INFO: Thermometer telemetry upload enabled state changed (via cloud): {:?}\n",
+            upload_enabled
+        );
+        self.set_thermometer_telemetry_upload_enabled(upload_enabled, from_cloud);
+    }
+
+    fn display_alert(&mut self, alert_message: &str) {
+        azs::debug!("ALERT: {:?}\n", alert_message);
+    }
+}
+
 // A main(), except that it returns a Result<T,E>, making it easy to invoke functions using the '?' operator.
 fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     let term = hook_sigterm()?;
@@ -168,6 +211,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     elt.set_period(button_check_period)?;
 
     let mut ui_container = UserInterfaceContainer {
+        term: term.clone(),
         ui,
         elt,
         is_connected: RefCell::new(false),
@@ -175,51 +219,9 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     };
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
 
-    let exit_code_callback_handler = |reason: FailureReason| {
-        azs::debug!(
-            "exit_code_callback_handler in main(): reason={:?}\n",
-            reason
-        );
-        match reason {
-            FailureReason::NetworkingIsReadyFailed => {
-                set_step!(STEP_NETWORK_IS_READY_FAILED);
-            }
-        };
-        term.store(true, Ordering::SeqCst);
-    };
-
-    let connection_changed_callback_handler = |connected: bool| {
-        azs::debug!(
-            "connection_changed_callback_handler in main(): connected={:?}\n",
-            connected
-        );
-        *ui_container.telemetry_upload_enabled.borrow_mut() = connected;
-
-        if connected {
-            // bugbug: call Cloud_SendDeviceDetails(serialNumber)
-            azs::debug!("Main connection-changed callback!\n");
-        }
-    };
-
-    let thermometer_telemetry_upload_enabled_changed = |upload_enabled: bool, from_cloud: bool| {
-        azs::debug!(
-            "INFO: Thermometer telemetry upload enabled state changed (via cloud): {:?}\n",
-            upload_enabled
-        );
-        ui_container.set_thermometer_telemetry_upload_enabled(upload_enabled, from_cloud);
-    };
-
-    let display_alert = |alert_message: &str| {
-        azs::debug!("ALERT: {:?}\n", alert_message);
-    };
-
     set_step!(STEP_CLOUD_INIT);
-    let mut cloud = Cloud::new(
-        exit_code_callback_handler,
-        thermometer_telemetry_upload_enabled_changed,
-        display_alert,
-        connection_changed_callback_handler,
-    )?;
+    let callbacks = crate::azureiot::Callbacks::default();
+    let mut cloud = Cloud::new(ui_container, callbacks)?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };

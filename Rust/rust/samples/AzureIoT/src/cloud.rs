@@ -1,20 +1,10 @@
-use crate::azureiot::{AzureIoT, AzureIoTEvent, FailureReason, IoTResult};
+use crate::azureiot::{AzureIoT, FailureReason, IoTResult};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use std::cell::RefCell;
 use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
-
-#[derive(Debug)]
-pub enum CloudEvent {
-    Failure(FailureReason),
-    TelemetryUploadEnabledChanged(bool),
-    Telemetry(Telemetry),
-    Alert(String),
-    ConnectionChanged(bool),
-}
 
 #[derive(Debug)]
 pub struct Telemetry {
@@ -27,36 +17,42 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub struct Cloud<FC, TU, DA, CC>
-where
-    FC: FnMut(FailureReason), // ExitCode_CallbackType
-    TU: FnMut(bool, bool),    // Cloud_TelemetryUploadEnabledChangedCallbackType
-    DA: FnMut(&str),          // Cloud_DisplayAlertCallbackType
-    CC: FnMut(bool),          // Cloud_ConnectionChangedCallbackType
-{
-    last_acked_version: u32,
-    date_time_buffer: String,
-    azureiot: AzureIoT,
-    events: RefCell<Vec<CloudEvent>>,
-    failure_callback: FC,
-    thermometer_telemetry_upload_enabled_changed: TU,
-    display_alert: DA,
-    connection_changed: CC,
+pub trait Callbacks {
+    fn telemetry_upload_enabled_changed(&mut self, status: bool, from_cloud: bool) {
+        drop(status);
+        drop(from_cloud);
+    }
+    fn display_alert(&mut self, alert_message: &str) {
+        drop(alert_message);
+    }
+    fn connection_changed(&mut self, connected: bool) {
+        drop(connected);
+    }
 }
 
-impl<FC, TU, DA, CC> IoCallback for Cloud<FC, TU, DA, CC>
-where
-    FC: FnMut(FailureReason),
-    TU: FnMut(bool, bool),
-    DA: FnMut(&str),
-    CC: FnMut(bool),
-{
+struct CloudData<FC> {
+    last_acked_version: u32,
+    date_time_buffer: String,
+    fc: FC,
+}
+
+pub struct Cloud<FC> {
+    azureiot: AzureIoT<CloudData<FC>>,
+}
+
+impl<FC> IoCallback for Cloud<FC> {
     fn event(&mut self, events: IoEvents) {
         self.azureiot.event(events)
     }
 
     unsafe fn fd(&self) -> i32 {
         self.azureiot.fd()
+    }
+}
+
+impl<FC: crate::azureiot::FailureCallback> crate::azureiot::FailureCallback for CloudData<FC> {
+    fn failure_callback(&mut self, reason: FailureReason) {
+        self.fc.failure_callback(reason)
     }
 }
 
@@ -68,73 +64,29 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl<FC, TU, DA, CC> Cloud<FC, TU, DA, CC>
-where
-    FC: FnMut(FailureReason),
-    TU: FnMut(bool, bool),
-    DA: FnMut(&str),
-    CC: FnMut(bool),
-{
+impl<FC> Cloud<FC> {
     pub fn new(
         failure_callback: FC,
-        thermometer_telemetry_upload_enabled_changed: TU,
-        display_alert: DA,
-        connection_changed: CC,
+        callbacks: crate::azureiot::Callbacks<'static>,
     ) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
-        let azureiot = AzureIoT::new(String::from(MODEL_ID))?;
-
-        Ok(Self {
+        let inner = CloudData {
             last_acked_version,
             date_time_buffer,
-            azureiot,
-            events: RefCell::new(Vec::<CloudEvent>::new()),
-            failure_callback,
-            thermometer_telemetry_upload_enabled_changed,
-            display_alert,
-            connection_changed,
-        })
+            fc: failure_callback,
+        };
+        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, callbacks)?;
+
+        Ok(Self { azureiot })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
-        (self.connection_changed)(true);
-        (self.failure_callback)(FailureReason::NetworkingIsReadyFailed);
-        (self.thermometer_telemetry_upload_enabled_changed)(true, true);
-        (self.display_alert)("Test alert");
 
         self.azureiot.test();
-        let events = self.do_work();
-        for event in events.iter() {
-            match event {
-                CloudEvent::Failure(reason) => {
-                    azs::debug!("Cloud::test() - CloudEvent::Failure({:?})\n", reason);
-                }
-                CloudEvent::TelemetryUploadEnabledChanged(status) => {
-                    azs::debug!(
-                        "Cloud::test() - CloudEvent::TelemetryUploadEnabledChanged({:?})\n",
-                        status
-                    );
-                }
-                CloudEvent::Telemetry(telemetry) => {
-                    azs::debug!(
-                        "Cloud::test() - CloudEvent::Telemetry({:?})\n",
-                        telemetry.temperature
-                    );
-                }
-                CloudEvent::Alert(message) => {
-                    azs::debug!("Cloud::test() - CloudEvent::Alert({:?})\n", message);
-                }
-                CloudEvent::ConnectionChanged(connected) => {
-                    azs::debug!(
-                        "Cloud::test() - CloudEvent::ConnectionChanged({:?})\n",
-                        connected
-                    );
-                }
-            }
-        }
+        self.do_work();
     }
 
     pub fn build_utc_datetime(t: SystemTime) -> String {
@@ -181,21 +133,7 @@ where
         azureiot_to_cloud_result(result)
     }
 
-    pub fn do_work(&self) -> Vec<CloudEvent> {
-        let iot_events = self.azureiot.do_work();
-        for event in iot_events.iter() {
-            // Process each event
-            match event {
-                AzureIoTEvent::Failure(reason) => {
-                    azs::debug!("INFO: Azure IoT Hub failure message received.\n");
-                    let event = CloudEvent::Failure(*reason);
-                    self.events.borrow_mut().push(event);
-                }
-                _ => {} // bugbug: finish filling this out
-            }
-        }
-
-        let empty_vec = Vec::<CloudEvent>::new();
-        self.events.replace(empty_vec) // Replace current list with empty, and return current list
+    pub fn do_work(&self) {
+        self.azureiot.do_work();
     }
 }

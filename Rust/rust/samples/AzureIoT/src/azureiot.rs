@@ -1,29 +1,27 @@
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
 use azs::applibs::iothub_device_client;
-use azs::applibs::iothub_device_client::IotHubEvent;
 use azs::applibs::iothub_message;
 use azs::applibs::networking;
 use azure_sphere as azs;
-use std::cell::RefCell;
 use std::time::Duration;
 
-//pub struct Callbacks {
-//    pub connection_status: Option<Box<dyn FnMut(bool /* connected */)>>,
-//    pub device_twin_received: Option<Box<dyn FnMut(String /* json twin content*/)>>,
-//    pub device_twin_report_state_ack: Option<Box<dyn FnMut(bool /* success */)>>,
-//    pub send_telemetry: Option<Box<dyn FnMut(bool /* success */)>>,
-//    pub device_method:
-//        Option<Box<dyn FnMut(String /* method name */, String /* payload */) -> String>>,
-//    pub cloud_to_device: Option<Box<dyn FnMut(IotHubMessageRef /* message */)>>,
-//}
+#[derive(Default)]
+pub struct Callbacks<'a> {
+    pub connection_status: Option<Box<dyn FnMut(bool /* connected */) + 'a>>,
+    pub device_twin_received: Option<Box<dyn FnMut(String /* json twin content*/) + 'a>>,
+    pub device_twin_report_state_ack: Option<Box<dyn FnMut(bool /* success */) + 'a>>,
+    pub send_telemetry: Option<Box<dyn FnMut(bool /* success */) + 'a>>,
+    pub device_method:
+        Option<Box<dyn FnMut(String /* method name */, String /* payload */) -> String + 'a>>,
+    //bugbug: type of IotHubMessage... pub cloud_to_device: Option<Box<dyn FnMut(&IotHubMessage /* message */) + 'a>>,
+}
 
-// dyn FnMut doesn't support Debug, so stub out here.
-//impl fmt::Debug for Callbacks {
-//    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//        f.debug_struct("Callbacks").finish_non_exhaustive()
-//    }
-//}
+pub trait FailureCallback {
+    fn failure_callback(&mut self, reason: FailureReason) {
+        drop(reason)
+    }
+}
 
 /// check if device is connected to the internet and Azure client is setup every second
 const DEFAULT_CONNECT_PERIOD_SECONDS: u64 = 1;
@@ -141,41 +139,43 @@ fn connection_callback_handler(rc_state: &Rc<RefCell<AzureIoTState>>, status: Co
 }
 */
 
-#[derive(Debug)]
-pub enum AzureIoTEvent {
-    Failure(FailureReason), // bugbug: might need to include more context about what failed
-    Bugbug,                 // bugbug: remove
+// An AzureIoT object, representing an IoT Hub client
+pub struct AzureIoT<F> {
+    inner: AzureIoTData<F>,
 }
 
-// An AzureIoT object, representing an IoT Hub client
-pub struct AzureIoT {
-    // The formerly mutable state...
+struct AzureIoTData<F> {
     elt: eventloop_timer_utilities::EventLoopTimer,
     connect_period_seconds: u64,
     authentication_state: AuthenticationState,
     client_handle: Option<iothub_device_client::IotHubDeviceClient>,
 
-    events: RefCell<Vec<AzureIoTEvent>>,
-
     /// Immutable state, the underlying IoT Hub client connection
     connection: Connection,
+
+    failure_callback: F,
+    callbacks: Callbacks<'static>,
 }
 
-impl IoCallback for AzureIoT {
+impl<F> IoCallback for AzureIoT<F> {
     /// Azure timer event:  Check connection status and send telemetry
     fn event(&mut self, _events: IoEvents) {
-        self.elt.consume_event().unwrap();
+        self.inner.elt.consume_event().unwrap();
 
         // bugbug: see AzureIoTConnectTimerEventHandler
     }
 
     unsafe fn fd(&self) -> i32 {
-        self.elt.fd()
+        self.inner.elt.fd()
     }
 }
 
-impl AzureIoT {
-    pub fn new(model_id: String) -> Result<Self, std::io::Error> {
+impl<F> AzureIoT<F> {
+    pub fn new(
+        model_id: String,
+        failure_callback: F,
+        callbacks: Callbacks<'static>,
+    ) -> Result<Self, std::io::Error> {
         let elt = eventloop_timer_utilities::EventLoopTimer::new()?;
         let connect_period = Duration::new(DEFAULT_CONNECT_PERIOD_SECONDS, 0);
         elt.set_period(connect_period)?;
@@ -185,19 +185,20 @@ impl AzureIoT {
         // bugbug: need a second EventLoopTimer for azureIoTConnectionTimer, separate from the DoWork timer.
 
         Ok(Self {
-            elt,
-            connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
-            authentication_state: AuthenticationState::NotAuthenticated,
-            client_handle: None,
-            events: RefCell::new(Vec::<AzureIoTEvent>::new()),
-            connection,
+            inner: AzureIoTData {
+                elt,
+                connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
+                authentication_state: AuthenticationState::NotAuthenticated,
+                client_handle: None,
+                connection,
+                failure_callback,
+                callbacks,
+            },
         })
     }
 
     pub fn test(&self) {
         azs::debug!("AzureIoT::test\n");
-        let event = AzureIoTEvent::Failure(FailureReason::NetworkingIsReadyFailed);
-        self.events.borrow_mut().push(event);
     }
 
     fn is_connection_ready_to_send_telemetry(&mut self) -> bool {
@@ -214,8 +215,7 @@ impl AzureIoT {
                 azs::debug!(
                     "WARNING: Cannot send Azure IoT Hub telemetry because the network is not up: {}.\n",
                 err);
-                let event = AzureIoTEvent::Failure(FailureReason::NetworkingIsReadyFailed);
-                self.events.borrow_mut().push(event);
+                // bugbug: call the failure callback
                 false
             }
         }
@@ -229,7 +229,7 @@ impl AzureIoT {
         if !self.is_connection_ready_to_send_telemetry() {
             return Err(IoTResult::NoNetwork);
         }
-        if self.authentication_state != AuthenticationState::Authenticated {
+        if self.inner.authentication_state != AuthenticationState::Authenticated {
             // AzureIoT client is not authenticated. Log a warning and return.
             azs::debug!("WARNING: Azure IoT Hub is not authenticated. Not sending telemetry.\n");
             return Err(IoTResult::OtherFailure);
@@ -240,7 +240,12 @@ impl AzureIoT {
             return Err(IoTResult::OtherFailure);
         }
         let message = message.unwrap();
-        let result = self.client_handle.as_ref().unwrap().send_event(message);
+        let result = self
+            .inner
+            .client_handle
+            .as_ref()
+            .unwrap()
+            .send_event(message);
         if result.is_err() {
             azs::debug!("ERROR: unable to send telemetry to Azure IoT Hub.\n");
             return Err(IoTResult::OtherFailure);
@@ -249,36 +254,10 @@ impl AzureIoT {
         Ok(())
     }
 
-    pub fn do_work(&self) -> Vec<AzureIoTEvent> {
-        if let Some(client_handle) = self.client_handle.as_ref() {
+    pub fn do_work(&self) {
+        if let Some(client_handle) = self.inner.client_handle.as_ref() {
             // There is a lower-level client handle, so invoke it to do work
-            let hub_events = client_handle.do_work();
-            for event in hub_events.iter() {
-                // Process each event
-                match event {
-                    IotHubEvent::Message(_message) => {
-                        azs::debug!("INFO: Azure IoT Hub message received.\n");
-                    }
-                    IotHubEvent::EventConfirmation(_result, _conf) => {
-                        azs::debug!("INFO: AzureIot Event Confirmation received.\n");
-                    }
-                    IotHubEvent::ConnectionStatusChanged(_status, _reason) => {
-                        azs::debug!("INFO: AzureIoT Connection status changed received.\n");
-                    }
-                    IotHubEvent::DeviceTwinChanged(_state, _vec) => {
-                        azs::debug!("INFO: Azure IoT Device Twin changed received.\n");
-                    }
-                    IotHubEvent::ReportedStateSent(_reason) => {
-                        azs::debug!("INFO: Azure IoT Reported state sent received.\n");
-                    }
-                    IotHubEvent::DeviceMethod(_str, _vec) => {
-                        azs::debug!("INFO: Azure IoT Device Method received.\n");
-                    }
-                }
-            }
+            client_handle.do_work();
         }
-
-        let empty_vec = Vec::<AzureIoTEvent>::new();
-        self.events.replace(empty_vec) // Replace current list with empty, and return current list
     }
 }
