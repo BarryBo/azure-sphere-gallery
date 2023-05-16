@@ -19,7 +19,7 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub trait Callbacks {
+pub trait CloudCallbacks {
     fn telemetry_upload_enabled_changed(&mut self, status: bool, from_cloud: bool) {
         drop(status);
         drop(from_cloud);
@@ -59,9 +59,7 @@ impl<FC, CB> IoCallback for Cloud<FC, CB> {
     }
 }
 
-impl<FC: crate::azureiot::FailureCallback, CB: Callbacks> crate::azureiot::FailureCallback
-    for CloudData<FC, CB>
-{
+impl<FC: FailureCallback, CB: CloudCallbacks> FailureCallback for CloudData<FC, CB> {
     fn failure_callback(&mut self, reason: FailureReason) {
         self.fc.failure_callback(reason)
     }
@@ -75,7 +73,7 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl<FC: crate::azureiot::FailureCallback + 'static, CB: Callbacks + 'static> Cloud<FC, CB> {
+impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> {
     pub fn new(failure_callback: FC, callbacks: CB) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
@@ -93,8 +91,9 @@ impl<FC: crate::azureiot::FailureCallback + 'static, CB: Callbacks + 'static> Cl
         iot_callbacks.connection_status = Some(Box::new(move |status| {
             inner_clone
                 .as_ref()
-                .borrow()
-                .connection_status_callback(status)
+                .borrow_mut()
+                .callbacks
+                .connection_changed(status)
         }));
 
         let inner_clone = inner.clone();
@@ -105,7 +104,8 @@ impl<FC: crate::azureiot::FailureCallback + 'static, CB: Callbacks + 'static> Cl
                 inner_clone
                     .as_ref()
                     .borrow_mut()
-                    .failure_callback(FailureReason::NetworkingIsReadyFailed);
+                    .callbacks
+                    .telemetry_upload_enabled_changed(false, false);
                 String::from("result")
             }));
         let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks)?;

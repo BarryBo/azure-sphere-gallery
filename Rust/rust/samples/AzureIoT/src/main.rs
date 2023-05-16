@@ -162,7 +162,7 @@ impl UserInterfaceContainer {
     }
 }
 
-impl crate::cloud::Callbacks for UserInterfaceContainer {
+impl crate::cloud::CloudCallbacks for UserInterfaceContainer {
     fn connection_changed(&mut self, connected: bool) {
         azs::debug!(
             "connection_changed_callback_handler in main(): connected={:?}\n",
