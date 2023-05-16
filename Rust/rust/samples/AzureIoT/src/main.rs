@@ -94,6 +94,25 @@ fn hook_sigterm() -> Result<Arc<AtomicBool>, std::io::Error> {
     Ok(term)
 }
 
+struct FailureHandler {
+    term: Arc<AtomicBool>,
+}
+
+impl crate::azureiot::FailureCallback for FailureHandler {
+    fn failure_callback(&mut self, reason: FailureReason) {
+        azs::debug!(
+            "exit_code_callback_handler in main(): reason={:?}\n",
+            reason
+        );
+        match reason {
+            FailureReason::NetworkingIsReadyFailed => {
+                set_step!(STEP_NETWORK_IS_READY_FAILED);
+            }
+        };
+        self.term.store(true, Ordering::SeqCst);
+    }
+}
+
 struct UserInterfaceContainer {
     ui: UserInterface,
     elt: eventloop_timer_utilities::EventLoopTimer,
@@ -102,7 +121,6 @@ struct UserInterfaceContainer {
     // borrow mutable, and the others won't compile.
     is_connected: RefCell<bool>,
     telemetry_upload_enabled: RefCell<bool>,
-    term: Arc<AtomicBool>,
 }
 
 impl IoCallback for UserInterfaceContainer {
@@ -141,21 +159,6 @@ impl UserInterfaceContainer {
         *self.telemetry_upload_enabled.borrow_mut() = upload_enabled;
         self.ui.set_status(upload_enabled);
         // bugbug: call Cloud_SendThermometerTelemetryUploadEnabledChangedEvent
-    }
-}
-
-impl crate::azureiot::FailureCallback for UserInterfaceContainer {
-    fn failure_callback(&mut self, reason: FailureReason) {
-        azs::debug!(
-            "exit_code_callback_handler in main(): reason={:?}\n",
-            reason
-        );
-        match reason {
-            FailureReason::NetworkingIsReadyFailed => {
-                set_step!(STEP_NETWORK_IS_READY_FAILED);
-            }
-        };
-        self.term.store(true, Ordering::SeqCst);
     }
 }
 
@@ -210,8 +213,9 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     let button_check_period = Duration::new(0, 1000 * 1000);
     elt.set_period(button_check_period)?;
 
+    let failure_handler = FailureHandler { term: term.clone() };
+
     let mut ui_container = UserInterfaceContainer {
-        term: term.clone(),
         ui,
         elt,
         is_connected: RefCell::new(false),
@@ -220,8 +224,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
 
     set_step!(STEP_CLOUD_INIT);
-    let callbacks = crate::azureiot::Callbacks::default();
-    let mut cloud = Cloud::new(ui_container, callbacks)?;
+    let mut cloud = Cloud::new(failure_handler, ui_container)?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };

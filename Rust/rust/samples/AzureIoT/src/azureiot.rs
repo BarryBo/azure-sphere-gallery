@@ -197,8 +197,17 @@ impl<F> AzureIoT<F> {
         })
     }
 
-    pub fn test(&self) {
+    pub fn test(&mut self) {
         azs::debug!("AzureIoT::test\n");
+
+        azs::debug!("AzureIoT Calling connection_status\n");
+        let cb = self.inner.callbacks.connection_status.as_mut().unwrap();
+        cb.as_mut()(true);
+
+        azs::debug!("AzureIoT Calling device_method\n");
+        let cb = self.inner.callbacks.device_method.as_mut().unwrap();
+        let result = cb.as_mut()(String::from("test"), String::from("payload"));
+        azs::debug!("AzureIoT::test: device_method returned {:?}\n", result)
     }
 
     fn is_connection_ready_to_send_telemetry(&mut self) -> bool {

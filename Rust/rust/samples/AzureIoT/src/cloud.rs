@@ -1,7 +1,9 @@
-use crate::azureiot::{AzureIoT, FailureReason, IoTResult};
+use crate::azureiot::{AzureIoT, FailureCallback, FailureReason, IoTResult};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::SystemTime;
 
 const MODEL_ID: &str = "dtmi:com:example:azuresphere:thermometer;1";
@@ -30,17 +32,24 @@ pub trait Callbacks {
     }
 }
 
-struct CloudData<FC> {
+struct CloudData<FC, CB> {
     last_acked_version: u32,
     date_time_buffer: String,
     fc: FC,
+    callbacks: CB,
 }
 
-pub struct Cloud<FC> {
-    azureiot: AzureIoT<CloudData<FC>>,
+impl<FC, CB> CloudData<FC, CB> {
+    fn connection_status_callback(&self, connected: bool) {
+        drop(connected)
+    }
 }
 
-impl<FC> IoCallback for Cloud<FC> {
+pub struct Cloud<FC, CB> {
+    azureiot: AzureIoT<Rc<RefCell<CloudData<FC, CB>>>>,
+}
+
+impl<FC, CB> IoCallback for Cloud<FC, CB> {
     fn event(&mut self, events: IoEvents) {
         self.azureiot.event(events)
     }
@@ -50,7 +59,9 @@ impl<FC> IoCallback for Cloud<FC> {
     }
 }
 
-impl<FC: crate::azureiot::FailureCallback> crate::azureiot::FailureCallback for CloudData<FC> {
+impl<FC: crate::azureiot::FailureCallback, CB: Callbacks> crate::azureiot::FailureCallback
+    for CloudData<FC, CB>
+{
     fn failure_callback(&mut self, reason: FailureReason) {
         self.fc.failure_callback(reason)
     }
@@ -64,11 +75,8 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl<FC> Cloud<FC> {
-    pub fn new(
-        failure_callback: FC,
-        callbacks: crate::azureiot::Callbacks<'static>,
-    ) -> Result<Self, std::io::Error> {
+impl<FC: crate::azureiot::FailureCallback + 'static, CB: Callbacks + 'static> Cloud<FC, CB> {
+    pub fn new(failure_callback: FC, callbacks: CB) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
@@ -76,15 +84,37 @@ impl<FC> Cloud<FC> {
             last_acked_version,
             date_time_buffer,
             fc: failure_callback,
+            callbacks,
         };
-        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, callbacks)?;
+        let inner = Rc::new(RefCell::new(inner));
+        let mut iot_callbacks = crate::azureiot::Callbacks::default();
+
+        let inner_clone = inner.clone();
+        iot_callbacks.connection_status = Some(Box::new(move |status| {
+            inner_clone
+                .as_ref()
+                .borrow()
+                .connection_status_callback(status)
+        }));
+
+        let inner_clone = inner.clone();
+        iot_callbacks.device_method =
+            Some(Box::new(move |method_name: String, payload: String| {
+                drop(method_name);
+                drop(payload);
+                inner_clone
+                    .as_ref()
+                    .borrow_mut()
+                    .failure_callback(FailureReason::NetworkingIsReadyFailed);
+                String::from("result")
+            }));
+        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks)?;
 
         Ok(Self { azureiot })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
-
         self.azureiot.test();
         self.do_work();
     }
