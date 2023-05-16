@@ -45,6 +45,7 @@ use std::time::{Duration, SystemTime};
 pub mod cloud;
 use crate::cloud::Cloud;
 pub mod azureiot;
+pub mod connection_iot_hub;
 pub mod user_interface;
 use crate::azureiot::FailureReason;
 use crate::user_interface::UserInterface;

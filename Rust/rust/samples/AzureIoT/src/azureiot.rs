@@ -1,9 +1,12 @@
+use crate::connection_iot_hub::{Connection, ConnectionStatus};
 use azs::applibs::eventloop::{IoCallback, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
 use azs::applibs::iothub_device_client;
 use azs::applibs::iothub_message;
 use azs::applibs::networking;
 use azure_sphere as azs;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 #[derive(Default)]
@@ -55,24 +58,6 @@ enum AuthenticationState {
     AuthenticationInitiated,
     /// Client is authenticated by the Azure IoT Hub.
     Authenticated,
-}
-
-#[derive(Debug)]
-pub enum ConnectionStatus {
-    NotStarted,
-    Started,
-    Complete(iothub_device_client::IotHubDeviceClient),
-    Failed,
-}
-
-struct Connection {
-    model_id: String,
-}
-
-impl Connection {
-    pub fn new(model_id: String) -> Self {
-        Self { model_id }
-    }
 }
 
 /*
@@ -141,7 +126,10 @@ fn connection_callback_handler(rc_state: &Rc<RefCell<AzureIoTState>>, status: Co
 
 // An AzureIoT object, representing an IoT Hub client
 pub struct AzureIoT<F> {
-    inner: AzureIoTData<F>,
+    inner: Rc<RefCell<AzureIoTData<F>>>,
+
+    /// Immutable state, the underlying IoT Hub client connection
+    connection: Connection,
 }
 
 struct AzureIoTData<F> {
@@ -150,9 +138,6 @@ struct AzureIoTData<F> {
     authentication_state: AuthenticationState,
     client_handle: Option<iothub_device_client::IotHubDeviceClient>,
 
-    /// Immutable state, the underlying IoT Hub client connection
-    connection: Connection,
-
     failure_callback: F,
     callbacks: Callbacks<'static>,
 }
@@ -160,17 +145,23 @@ struct AzureIoTData<F> {
 impl<F> IoCallback for AzureIoT<F> {
     /// Azure timer event:  Check connection status and send telemetry
     fn event(&mut self, _events: IoEvents) {
-        self.inner.elt.consume_event().unwrap();
+        self.inner.as_ref().borrow().elt.consume_event().unwrap();
 
         // bugbug: see AzureIoTConnectTimerEventHandler
     }
 
     unsafe fn fd(&self) -> i32 {
-        self.inner.elt.fd()
+        self.inner.borrow().elt.fd()
     }
 }
 
-impl<F> AzureIoT<F> {
+impl<F> AzureIoTData<F> {
+    fn connection_status_callback(&mut self, status: ConnectionStatus) {
+        azs::debug!("AzureIoT::connection_status_callback: {:?}\n", status);
+    }
+}
+
+impl<'a, F: 'static> AzureIoT<F> {
     pub fn new(
         model_id: String,
         failure_callback: F,
@@ -185,28 +176,45 @@ impl<F> AzureIoT<F> {
         // bugbug: need a second EventLoopTimer for azureIoTConnectionTimer, separate from the DoWork timer.
 
         Ok(Self {
-            inner: AzureIoTData {
+            inner: Rc::new(RefCell::new(AzureIoTData {
                 elt,
                 connect_period_seconds: DEFAULT_CONNECT_PERIOD_SECONDS,
                 authentication_state: AuthenticationState::NotAuthenticated,
                 client_handle: None,
-                connection,
                 failure_callback,
                 callbacks,
-            },
+            })),
+            connection,
         })
     }
 
     pub fn test(&mut self) {
         azs::debug!("AzureIoT::test\n");
 
+        let inner_clone = self.inner.clone();
+        let cb =
+            Box::new(move |status| inner_clone.borrow_mut().connection_status_callback(status));
+
+        self.connection.start(cb);
+
         azs::debug!("AzureIoT Calling connection_status\n");
-        let cb = self.inner.callbacks.connection_status.as_mut().unwrap();
-        cb.as_mut()(true);
+        self.inner
+            .borrow_mut()
+            .callbacks
+            .connection_status
+            .as_mut()
+            .unwrap()
+            .as_mut()(true);
 
         azs::debug!("AzureIoT Calling device_method\n");
-        let cb = self.inner.callbacks.device_method.as_mut().unwrap();
-        let result = cb.as_mut()(String::from("test"), String::from("payload"));
+        let result = self
+            .inner
+            .borrow_mut()
+            .callbacks
+            .device_method
+            .as_mut()
+            .unwrap()
+            .as_mut()(String::from("test"), String::from("payload"));
         azs::debug!("AzureIoT::test: device_method returned {:?}\n", result)
     }
 
@@ -238,7 +246,7 @@ impl<F> AzureIoT<F> {
         if !self.is_connection_ready_to_send_telemetry() {
             return Err(IoTResult::NoNetwork);
         }
-        if self.inner.authentication_state != AuthenticationState::Authenticated {
+        if self.inner.borrow().authentication_state != AuthenticationState::Authenticated {
             // AzureIoT client is not authenticated. Log a warning and return.
             azs::debug!("WARNING: Azure IoT Hub is not authenticated. Not sending telemetry.\n");
             return Err(IoTResult::OtherFailure);
@@ -251,6 +259,7 @@ impl<F> AzureIoT<F> {
         let message = message.unwrap();
         let result = self
             .inner
+            .borrow()
             .client_handle
             .as_ref()
             .unwrap()
@@ -264,7 +273,7 @@ impl<F> AzureIoT<F> {
     }
 
     pub fn do_work(&self) {
-        if let Some(client_handle) = self.inner.client_handle.as_ref() {
+        if let Some(client_handle) = self.inner.borrow().client_handle.as_ref() {
             // There is a lower-level client handle, so invoke it to do work
             client_handle.do_work();
         }
