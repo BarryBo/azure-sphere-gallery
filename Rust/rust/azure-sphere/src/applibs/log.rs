@@ -10,7 +10,9 @@ macro_rules! debug_checked {
         $crate::applibs::log::log_debug_checked(concat!($arg, "\0"))
     };
     ($($args:tt)*) => {{
-        $crate::applibs::log::log_debug_checked($crate::alloc::format!($($args)*))
+        let formatted = $crate::alloc::format!($($args)*);
+        let formatted_cstr = std::ffi::CString::new(formatted).unwrap();
+        $crate::applibs::log::log_debug_checked(formatted_cstr)
     }};
 }
 pub use crate::debug_checked;
@@ -36,7 +38,9 @@ macro_rules! debug {
         $crate::applibs::log::log_debug(concat!($arg, "\0"))
     };
     ($($args:tt)*) => {{
-        $crate::applibs::log::log_debug($crate::alloc::format!($($args)*))
+        let formatted = $crate::alloc::format!($($args)*);
+        let formatted_cstr = std::ffi::CString::new(formatted).unwrap();
+        $crate::applibs::log::log_debug(formatted_cstr)
     }};
 }
 pub use crate::debug;
