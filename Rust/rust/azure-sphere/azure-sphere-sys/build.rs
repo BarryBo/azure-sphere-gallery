@@ -80,6 +80,7 @@ fn main() {
         "applibs/uart.h",
         "applibs/wificonfig.h",
         "azure_prov_client/prov_device_ll_client.h",
+        "azure_prov_client/iothub_security_factory.h",
         "azureiot/azure_sphere_provisioning.h",
         "azureiot/iothub_client_core_common.h",
         "azureiot/iothub_client_options.h",

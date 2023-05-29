@@ -74,7 +74,11 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
 }
 
 impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> {
-    pub fn new(failure_callback: FC, callbacks: CB) -> Result<Self, std::io::Error> {
+    pub fn new(
+        failure_callback: FC,
+        callbacks: CB,
+        hostname: String,
+    ) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
         let date_time_buffer = String::new();
 
@@ -108,7 +112,7 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
                     .telemetry_upload_enabled_changed(false, false);
                 String::from("result")
             }));
-        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks)?;
+        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks, hostname)?;
 
         Ok(Self { azureiot })
     }

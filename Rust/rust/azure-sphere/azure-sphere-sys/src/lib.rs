@@ -39,6 +39,7 @@ pub mod applibs {
     sys_mod!(networking);
     sys_mod!(powermanagement);
     sys_mod!(prov_device_ll_client);
+    sys_mod!(iothub_security_factory);
     sys_mod!(pwm);
     sys_mod!(rtc);
     sys_mod!(spi);

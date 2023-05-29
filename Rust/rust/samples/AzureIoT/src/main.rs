@@ -191,7 +191,7 @@ impl crate::cloud::CloudCallbacks for UserInterfaceContainer {
 }
 
 // A main(), except that it returns a Result<T,E>, making it easy to invoke functions using the '?' operator.
-fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
+fn actual_main(hostname: String) -> Result<(), std::io::Error> {
     let term = hook_sigterm()?;
 
     azs::debug!("Azure IoT Application starting.\n");
@@ -225,7 +225,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
     event_loop.register_io(IoEvents::Input, &mut ui_container)?;
 
     set_step!(STEP_CLOUD_INIT);
-    let mut cloud = Cloud::new(failure_handler, ui_container)?;
+    let mut cloud = Cloud::new(failure_handler, ui_container, hostname)?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };
@@ -249,7 +249,7 @@ fn actual_main(_hostname: &String) -> Result<(), std::io::Error> {
 
 pub fn main() -> ! {
     if let Some(hostname) = args().nth(1) {
-        let result = actual_main(&hostname);
+        let result = actual_main(hostname);
         if result.is_err() {
             azs::debug!("Failed at step {:?} with {:?}\n", get_step!(), result.err());
             std::process::exit(get_step!());

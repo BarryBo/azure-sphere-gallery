@@ -518,7 +518,7 @@ impl IotHubDeviceClientLowLevel {
     }
 
     /// Helper function on top of IotHubDeviceClientLL_SetOption()
-    unsafe fn set_option_internal(
+    pub(crate) unsafe fn set_option_internal(
         // unsafe because it consumes unsafe types
         &self,
         option: *const libc::c_char,

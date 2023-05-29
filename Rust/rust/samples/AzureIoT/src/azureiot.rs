@@ -166,11 +166,12 @@ impl<'a, F: 'static> AzureIoT<F> {
         model_id: String,
         failure_callback: F,
         callbacks: Callbacks<'static>,
+        hostname: String,
     ) -> Result<Self, std::io::Error> {
         let elt = eventloop_timer_utilities::EventLoopTimer::new()?;
         let connect_period = Duration::new(DEFAULT_CONNECT_PERIOD_SECONDS, 0);
         elt.set_period(connect_period)?;
-        let connection = Connection::new(model_id);
+        let connection = Connection::new(model_id, hostname);
 
         // bugbug: call Connection_Initialize(ConnectionCallbackHandler) in connection_iot_hub or other implementations
         // bugbug: need a second EventLoopTimer for azureIoTConnectionTimer, separate from the DoWork timer.

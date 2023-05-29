@@ -7,7 +7,9 @@ use crate::applibs::iothub_device_client_ll::{
     DeviceTwinUpdateState, IotHubDeviceClientLowLevel, MessageDisposition,
 };
 use crate::applibs::iothub_message::IotHubMessage;
+use azure_sphere_sys::applibs::iothub_client_options;
 use std::cell::RefCell;
+use std::ffi::CString;
 
 #[derive(Debug)]
 pub enum IotHubEvent {
@@ -65,6 +67,38 @@ impl IotHubDeviceClient {
     }
 
     // bugbug: bring over the set_option_* methods from iot_device_client.rs
+
+    pub fn set_option_deviceid(&self, device_id_for_cert_usage: i32) -> Result<(), ClientResult> {
+        let option_name = CString::new("SetDeviceId").unwrap();
+        unsafe {
+            self.client.set_option_internal(
+                option_name.as_ptr(),
+                &device_id_for_cert_usage as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    /// IotHubDeviceClientLL_SetOption for OPTION_AUTO_URL_ENCODE_DECODE (bool*)
+    pub fn set_option_auto_url_encode_decode(&self, value: bool) -> Result<(), ClientResult> {
+        unsafe {
+            let value = if value { 1u8 } else { 0u8 };
+            self.client.set_option_internal(
+                iothub_client_options::OPTION_AUTO_URL_ENCODE_DECODE.as_ptr(),
+                &value as *const _ as *const libc::c_void,
+            )
+        }
+    }
+
+    /// IotHubDeviceClientLL_SetOption for OPTION_MODEL_ID (const char*)
+    pub fn set_option_model_id(&self, value: &str) -> Result<(), ClientResult> {
+        unsafe {
+            let value = std::ffi::CString::new(value.as_bytes()).unwrap();
+            self.client.set_option_internal(
+                iothub_client_options::OPTION_MODEL_ID.as_ptr(),
+                value.as_ptr() as *const libc::c_void,
+            )
+        }
+    }
 
     pub fn send_event(&self, event_message: IotHubMessage) -> Result<(), ClientResult> {
         // bugbug: this is ugly.  The send_event_async() should use a callback that
