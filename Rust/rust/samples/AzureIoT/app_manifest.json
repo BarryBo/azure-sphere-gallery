@@ -4,7 +4,6 @@
   "ComponentId": "819255ff-8640-41fd-aea7-f85d34c491d5",
   "EntryPoint": "/bin/azureiot",
   "CmdArgs": [
-    "--Hostname",
     "barrybo-rust-test.azure-devices.net"
   ],
   "Capabilities": {
