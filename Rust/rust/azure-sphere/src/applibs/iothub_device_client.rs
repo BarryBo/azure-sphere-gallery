@@ -1,53 +1,38 @@
-/// A callback-free wrapper on top of iot_device_client.rs
-///
-/// The do_work() method returns a list of events that were generated.
+/// A wrapper on top of iot_device_client.rs
 ///
 use crate::applibs::iothub_device_client_ll::{
-    ClientResult, ClientRetryPolicy, ConfirmationResult, ConnectionStatus, ConnectionStatusReason,
-    DeviceTwinUpdateState, IotHubDeviceClientLowLevel, MessageDisposition,
+    ClientResult, ClientRetryPolicy, IotHubDeviceClientLowLevel, MessageDisposition,
 };
 use crate::applibs::iothub_message::IotHubMessage;
 use azure_sphere_sys::applibs::iothub_client_options;
-use std::cell::RefCell;
 use std::ffi::CString;
-
-#[derive(Debug)]
-pub enum IotHubEvent {
-    EventConfirmation(ConfirmationResult, IotHubMessage), // Queued
-    Message(IotHubMessage),                               // Queued
-    ConnectionStatusChanged(ConnectionStatus, ConnectionStatusReason),
-    DeviceTwinChanged(DeviceTwinUpdateState, Vec<u8>), // Queued
-    ReportedStateSent(ConnectionStatusReason),         // Queued
-    DeviceMethod(std::ffi::CString, Vec<u8>),
-}
 
 #[derive(Debug)]
 pub struct IotHubDeviceClient {
     // bugbug: make private once the set_option_* are sorted out.
     pub client: IotHubDeviceClientLowLevel,
-
-    // RefCell here, so that immutable "self" can be used in callbacks
-    events: RefCell<Vec<IotHubEvent>>,
 }
 
 impl IotHubDeviceClient {
     pub fn new(client_ll: IotHubDeviceClientLowLevel) -> Result<Self, ClientResult> {
-        let result = IotHubDeviceClient {
-            client: client_ll,
-            events: RefCell::new(Vec::<IotHubEvent>::new()),
-        };
+        let result = IotHubDeviceClient { client: client_ll };
         result.client.set_message_callback(|message| {
-            let event = IotHubEvent::Message(message);
-            result.events.borrow_mut().push(event);
-            // bugbug: no good way for the event-based system to
-            // know what disposition to use here.
+            crate::debug!(
+                "IotHubDeviceClient message callback invoked {:?}\n",
+                message
+            );
+            // bugbug: implement
             MessageDisposition::Accepted
         })?;
         result
             .client
             .set_device_twin_callback(|update_state, vec| {
-                let event = IotHubEvent::DeviceTwinChanged(update_state, vec);
-                result.events.borrow_mut().push(event);
+                crate::debug!(
+                    "IotHubDeviceClient device twin callback invoked {:?} {:?}\n",
+                    update_state,
+                    vec
+                );
+                // bugbug: implement
             })?;
         //result.client.set_device_method_callback(|method, vec| {
         //    let method = std::ffi::CString::new(Box::new(method));
@@ -108,9 +93,10 @@ impl IotHubDeviceClient {
             let event_message_handle = event_message.get_handle();
 
             let callback = |confirmation_result| {
-                let new_event_message = IotHubMessage::from_handle(event_message_handle);
-                let event = IotHubEvent::EventConfirmation(confirmation_result, new_event_message);
-                self.events.borrow_mut().push(event);
+                crate::debug!("IotDeviceClient send_event_async callback\n");
+                // bugbug: implement
+                drop(event_message_handle);
+                drop(confirmation_result);
             };
             self.client.send_event_async(event_message, callback)
         }
@@ -131,15 +117,16 @@ impl IotHubDeviceClient {
 
     pub fn send_reported_state(&self, reported_state: &[u8]) -> Result<(), ClientResult> {
         let callback = |status_code| {
-            let event = IotHubEvent::ReportedStateSent(status_code);
-            self.events.borrow_mut().push(event);
+            crate::debug!(
+                "IotDeviceClient send_reported_state callback {:?}\n",
+                status_code
+            );
+            // bugbug: implement
         };
         self.client.send_reported_state(reported_state, callback)
     }
 
-    pub fn do_work(&self) -> Vec<IotHubEvent> {
+    pub fn do_work(&self) {
         self.client.do_work();
-        let empty_vec = Vec::<IotHubEvent>::new();
-        self.events.replace(empty_vec) // Replace current list with empty, and return current list
     }
 }
