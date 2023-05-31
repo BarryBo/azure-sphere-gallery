@@ -19,6 +19,11 @@ pub trait IoCallback {
     unsafe fn fd(&self) -> i32;
 }
 
+pub trait IoCallbackList {
+    fn event(&mut self, fd: i32, events: IoEvents);
+    unsafe fn fd_list(&self) -> Vec<i32>;
+}
+
 /// I/O event registration
 #[derive(Debug)]
 pub struct IoEventRegistration {
@@ -118,6 +123,18 @@ impl EventLoop {
         context.event(IoEvents::from(events));
     }
 
+    unsafe extern "C" fn event_loop_callback_list_wrapper(
+        _el: *mut eventloop::EventLoop,
+        fd: libc::c_int,
+        events: eventloop::EventLoop_IoEvents,
+        context: *mut libc::c_void,
+    ) {
+        let context = (context as *mut Box<&mut dyn IoCallbackList>)
+            .as_mut()
+            .unwrap();
+        context.event(fd, IoEvents::from(events));
+    }
+
     /// Registers an I/O event with an EventLoop.
     pub fn register_io(
         &mut self,
@@ -142,6 +159,36 @@ impl EventLoop {
                 let elr = IoEventRegistration { registration: er };
                 Ok(elr)
             }
+        }
+    }
+
+    pub fn register_io_list(
+        &mut self,
+        event_bitmask: IoEvents,
+        observer: &mut dyn IoCallbackList,
+    ) -> Result<Vec<IoEventRegistration>, std::io::Error> {
+        let mut registrations: Vec<IoEventRegistration> = Vec::new();
+        unsafe {
+            let observer_fds = (*observer).fd_list();
+            let context =
+                Box::into_raw(Box::new(Box::new(observer) as Box<&mut dyn IoCallbackList>));
+            for observer_fd in observer_fds {
+                let er = EventLoop_RegisterIo(
+                    self.el,
+                    observer_fd,
+                    event_bitmask.into(),
+                    Self::event_loop_callback_list_wrapper,
+                    context as _,
+                );
+                if er.is_null() {
+                    return Err(Error::last_os_error());
+                } else {
+                    self.io_observers.push(er);
+                    let elr = IoEventRegistration { registration: er };
+                    registrations.push(elr);
+                }
+            }
+            Ok(registrations)
         }
     }
 

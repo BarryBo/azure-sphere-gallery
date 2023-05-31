@@ -1,5 +1,5 @@
 use crate::azureiot::{AzureIoT, FailureCallback, FailureReason, IoTResult};
-use azs::applibs::eventloop::{IoCallback, IoEvents};
+use azs::applibs::eventloop::{IoCallbackList, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::cell::RefCell;
@@ -49,13 +49,13 @@ pub struct Cloud<FC, CB> {
     azureiot: AzureIoT<Rc<RefCell<CloudData<FC, CB>>>>,
 }
 
-impl<FC, CB> IoCallback for Cloud<FC, CB> {
-    fn event(&mut self, events: IoEvents) {
-        self.azureiot.event(events)
+impl<FC: 'static, CB: 'static> IoCallbackList for Cloud<FC, CB> {
+    fn event(&mut self, fd: i32, events: IoEvents) {
+        self.azureiot.event(fd, events)
     }
 
-    unsafe fn fd(&self) -> i32 {
-        self.azureiot.fd()
+    unsafe fn fd_list(&self) -> Vec<i32> {
+        self.azureiot.fd_list()
     }
 }
 

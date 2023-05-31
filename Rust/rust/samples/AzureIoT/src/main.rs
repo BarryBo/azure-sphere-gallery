@@ -230,7 +230,7 @@ fn actual_main(hostname: String) -> Result<(), std::io::Error> {
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };
     let _ = cloud.send_telemetry(&reading, Some(SystemTime::now()));
-    event_loop.register_io(IoEvents::Input, &mut cloud)?;
+    event_loop.register_io_list(IoEvents::Input, &mut cloud)?;
 
     //
     // Main loop
