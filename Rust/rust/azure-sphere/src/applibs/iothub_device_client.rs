@@ -1,8 +1,10 @@
 /// A wrapper on top of iot_device_client.rs
 ///
 use crate::applibs::iothub_device_client_ll::{
-    ClientResult, ClientRetryPolicy, IotHubDeviceClientLowLevel, MessageDisposition,
+    ClientResult, ClientRetryPolicy, ConnectionStatus, ConnectionStatusReason,
+    DeviceTwinUpdateState, IotHubDeviceClientLowLevel, MessageDisposition,
 };
+use crate::applibs::iothub_message;
 use crate::applibs::iothub_message::IotHubMessage;
 use azure_sphere_sys::applibs::iothub_client_options;
 use std::ffi::CString;
@@ -46,9 +48,26 @@ impl IotHubDeviceClient {
 
     pub fn set_device_method_callback<F>(&self, callback: F) -> Result<(), ClientResult>
     where
-        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+        F: FnMut(String, Vec<u8>) -> (i32, Vec<u8>),
     {
         self.client.set_device_method_callback(callback)
+    }
+
+    pub fn set_device_twin_callback<F>(
+        &self,
+        callback: F, // BUGBUG: this should be Option()
+    ) -> Result<(), ClientResult>
+    where
+        F: FnMut(DeviceTwinUpdateState, Vec<u8>),
+    {
+        self.client.set_device_twin_callback(callback)
+    }
+
+    pub fn set_connection_status_callback<F>(&self, callback: F) -> Result<(), ClientResult>
+    where
+        F: FnMut(ConnectionStatus, ConnectionStatusReason),
+    {
+        self.client.set_connection_status_callback(callback)
     }
 
     // bugbug: bring over the set_option_* methods from iot_device_client.rs
@@ -124,6 +143,17 @@ impl IotHubDeviceClient {
             // bugbug: implement
         };
         self.client.send_reported_state(reported_state, callback)
+    }
+
+    /// Sets up the message callback to be invoked when IoT Hub issues a
+    /// message to the device. This is a blocking call.
+    ///
+    /// See IotHubDeviceClientLL_SetMessageCallback()
+    pub fn set_message_callback<F>(&self, callback: F) -> Result<(), ClientResult>
+    where
+        F: FnMut(iothub_message::IotHubMessage) -> MessageDisposition,
+    {
+        self.client.set_message_callback(callback)
     }
 
     pub fn do_work(&self) {

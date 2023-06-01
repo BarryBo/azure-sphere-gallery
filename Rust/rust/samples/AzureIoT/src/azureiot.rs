@@ -2,7 +2,11 @@ use crate::connection_iot_hub::{Connection, ConnectionStatus};
 use azs::applibs::eventloop::{IoCallbackList, IoEvents};
 use azs::applibs::eventloop_timer_utilities;
 use azs::applibs::iothub_device_client;
+use azs::applibs::iothub_device_client_ll::{
+    ConnectionStatusReason, DeviceTwinUpdateState, MessageDisposition,
+};
 use azs::applibs::iothub_message;
+use azs::applibs::iothub_message::IotHubMessage;
 use azs::applibs::networking;
 use azure_sphere as azs;
 use std::cell::RefCell;
@@ -15,9 +19,10 @@ pub struct Callbacks<'a> {
     pub device_twin_received: Option<Box<dyn FnMut(String /* json twin content*/) + 'a>>,
     pub device_twin_report_state_ack: Option<Box<dyn FnMut(bool /* success */) + 'a>>,
     pub send_telemetry: Option<Box<dyn FnMut(bool /* success */) + 'a>>,
-    pub device_method:
-        Option<Box<dyn FnMut(String /* method name */, String /* payload */) -> String + 'a>>,
-    //bugbug: type of IotHubMessage... pub cloud_to_device: Option<Box<dyn FnMut(&IotHubMessage /* message */) + 'a>>,
+    pub device_method: Option<
+        Box<dyn FnMut(String /* method name */, Vec<u8> /* payload */) -> (i32, Vec<u8>) + 'a>,
+    >,
+    pub cloud_to_device: Option<Box<dyn FnMut(IotHubMessage /* message */) + 'a>>,
 }
 
 pub trait FailureCallback {
@@ -80,7 +85,7 @@ struct AzureIoTData<F> {
     client_handle: Option<iothub_device_client::IotHubDeviceClient>,
 
     failure_callback: F,
-    callbacks: Callbacks<'static>,
+    callbacks: Rc<RefCell<Callbacks<'static>>>,
 }
 
 impl<F: 'static> IoCallbackList for AzureIoT<F> {
@@ -127,15 +132,79 @@ impl<F> AzureIoTData<F> {
                     self.authentication_state = AuthenticationState::AuthenticationInitiated;
                 }
 
-                // bugbug: set callbacks
-                //let _ = client_handle.set_message_callback(Box::new(
-                //    move |message: &iothub_message::IotHubMessageRef| {
-                //        azs::debug!("INFO: Azure IoT Hub message received.\n");
-                //        let state = captured_state.borrow_mut();
-                //        cloud_to_device_callback(state, message);
-                //        iothub_device_client_ll::MessageDisposition::Abandoned
-                //    },
-                //));
+                let client = self.client_handle.as_ref().unwrap();
+                let callback_clone = self.callbacks.clone();
+                let _ = client.set_message_callback(Box::new(
+                    move |message: iothub_message::IotHubMessage| {
+                        // See CloudToDeviceCallback
+                        azs::debug!("INFO: Azure IoT Hub message received.\n");
+                        if let Some(cb) = &mut callback_clone.as_ref().borrow_mut().cloud_to_device
+                        {
+                            (*cb)(message)
+                        };
+                        MessageDisposition::Accepted
+                    },
+                ));
+
+                let callback_clone = self.callbacks.clone();
+                let _ = client.set_device_twin_callback(Box::new(
+                    move |_update_state: DeviceTwinUpdateState, vec: Vec<u8>| {
+                        // See DeviceTwinCallback
+                        // vec[] is a non-null terminated JSON string.  In the C version,
+                        // it is null-terminated here in a local buffer.  For Rust, just
+                        // convert to String.
+                        if let Some(cb) =
+                            &mut callback_clone.as_ref().borrow_mut().device_twin_received
+                        {
+                            let json = String::from_utf8(vec);
+                            match json {
+                                Err(e) => {
+                                    azs::debug!(
+                                        "AzureIot DeviceTwin callback - invalid JSON: {:?}\n",
+                                        e
+                                    )
+                                    // bugbug: the C version invoked the failureCallbackFunction here, but it isn't in scope in Rust
+                                    // may need to package both .callbakcs and .failure_callback_function into a single refcounted object
+                                }
+                                Ok(json) => cb(json),
+                            }
+                        }
+                    },
+                ));
+
+                let callback_clone = self.callbacks.clone();
+                let _ = client.set_device_method_callback(Box::new(
+                    move |method_name: String, payload: Vec<u8>| {
+                        // See DeviceMethodCallback
+                        azs::debug!(
+                            "Received Device Method callback: Method name {:?}.\n",
+                            method_name
+                        );
+                        if let Some(cb) = &mut callback_clone.as_ref().borrow_mut().device_method {
+                            (*cb)(method_name, payload)
+                        } else {
+                            let empty_vec: Vec<u8> = Vec::new();
+                            (-1, empty_vec)
+                        }
+                    },
+                ));
+
+                let callback_clone = self.callbacks.clone();
+                let _ = client.set_connection_status_callback(Box::new(
+                    move |result: azs::applibs::iothub_device_client_ll::ConnectionStatus,
+                          reason: ConnectionStatusReason| {
+                        // See ConnectionStatusCallback
+                        azs::debug!("Azure IoT connection status: {:?}\n", reason);
+                        if result == azs::applibs::iothub_device_client_ll::ConnectionStatus::Unauthenticated {
+                            // bugbug: call ConnectionCallbackHandler(Connection_NotStarted, NULL)
+                        }
+                        if let Some(cb) = &mut callback_clone.as_ref().borrow_mut().connection_status {
+                            (*cb)(result == azs::applibs::iothub_device_client_ll::ConnectionStatus::Authenticated)
+                        }
+
+                        
+                    },
+                ));
             }
             ConnectionStatus::Failed => {
                 // If we fail to connect, reduce the polling frequency, starting at
@@ -190,7 +259,7 @@ impl<'a, F: 'static> AzureIoT<F> {
                 connection_status: ConnectionStatus::NotStarted,
                 client_handle: None,
                 failure_callback,
-                callbacks,
+                callbacks: Rc::new(RefCell::new(callbacks)),
             })),
             connection,
         })
@@ -242,20 +311,25 @@ impl<'a, F: 'static> AzureIoT<F> {
         self.inner
             .borrow_mut()
             .callbacks
+            .as_ref()
+            .borrow_mut()
             .connection_status
             .as_mut()
             .unwrap()
             .as_mut()(true);
 
         azs::debug!("AzureIoT Calling device_method\n");
+        let test_payload: Vec<u8> = vec![65, 68];
         let result = self
             .inner
             .borrow_mut()
             .callbacks
+            .as_ref()
+            .borrow_mut()
             .device_method
             .as_mut()
             .unwrap()
-            .as_mut()(String::from("test"), String::from("payload"));
+            .as_mut()(String::from("test"), test_payload);
         azs::debug!("AzureIoT::test: device_method returned {:?}\n", result)
     }
 

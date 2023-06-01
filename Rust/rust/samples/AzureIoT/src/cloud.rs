@@ -89,29 +89,28 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
             callbacks,
         };
         let inner = Rc::new(RefCell::new(inner));
-        let mut iot_callbacks = crate::azureiot::Callbacks::default();
+        let iot_callbacks = crate::azureiot::Callbacks::default();
 
-        let inner_clone = inner.clone();
-        iot_callbacks.connection_status = Some(Box::new(move |status| {
-            inner_clone
-                .as_ref()
-                .borrow_mut()
-                .callbacks
-                .connection_changed(status)
-        }));
+        /*  bugbug: this doesn't appear in Cloud_Initialize
+                let inner_clone = inner.clone();
+                iot_callbacks.connection_status = Some(Box::new(move |status| {
+                    inner_clone
+                        .as_ref()
+                        .borrow_mut()
+                        .callbacks
+                        .connection_changed(status)
+                }));
 
-        let inner_clone = inner.clone();
-        iot_callbacks.device_method =
-            Some(Box::new(move |method_name: String, payload: String| {
-                drop(method_name);
-                drop(payload);
-                inner_clone
-                    .as_ref()
-                    .borrow_mut()
-                    .callbacks
-                    .telemetry_upload_enabled_changed(false, false);
-                String::from("result")
-            }));
+                let inner_clone = inner.clone();
+                iot_callbacks.device_method =
+                    Some(Box::new(move |method_name: String, payload: Vec<u8>| {
+                        inner_clone
+                            .as_ref()
+                            .borrow_mut()
+                            .callbacks
+                            .device_method(method_name, payload)
+                    }));
+        */
         let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks, hostname)?;
 
         Ok(Self { azureiot })

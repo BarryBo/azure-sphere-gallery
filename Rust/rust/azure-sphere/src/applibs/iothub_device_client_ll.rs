@@ -822,13 +822,14 @@ impl IotHubDeviceClientLowLevel {
         user_context_callback: *mut libc::c_void,
     ) -> libc::c_int
     where
-        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+        F: FnMut(String, Vec<u8>) -> (i32, Vec<u8>),
     {
         let method_name = std::ffi::CStr::from_ptr(method_name);
+        let method_name = method_name.to_string_lossy().into_owned();
         let payload = slice::from_raw_parts(payload, size).to_vec();
 
         let callback = &mut *(user_context_callback as *mut F);
-        let (response_code, response_data) = callback(method_name, &payload);
+        let (response_code, response_data) = callback(method_name, payload);
 
         // `response` must be memory allocated via C malloc() and doesn't need to be null-terminated
         let response_native = libc::malloc(response_data.len());
@@ -851,7 +852,7 @@ impl IotHubDeviceClientLowLevel {
         callback: F, // BUGBUG: this should be Option()
     ) -> Result<(), ClientResult>
     where
-        F: FnMut(&std::ffi::CStr, &Vec<u8>) -> (libc::c_int, Vec<u8>),
+        F: FnMut(String, Vec<u8>) -> (i32, Vec<u8>),
     {
         let mut context = callback;
         let result = unsafe {
