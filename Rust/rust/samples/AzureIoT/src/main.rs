@@ -40,8 +40,8 @@ use std::cell::RefCell;
 use std::env::args;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use std::sync::OnceLock;
 pub mod cloud;
 use crate::cloud::Cloud;
 pub mod azureiot;
@@ -49,7 +49,6 @@ pub mod connection_iot_hub;
 pub mod user_interface;
 use crate::azureiot::FailureReason;
 use crate::user_interface::UserInterface;
-use signal_hook_registry;
 
 const STEP_SUCCESS: i32 = 0;
 const STEP_SIGNAL_REGISTRATION: i32 = 1;
@@ -79,24 +78,24 @@ macro_rules! get_step {
     };
 }
 
+static TERM_FLAG: OnceLock<AtomicBool> = OnceLock::new();
+
+extern "C" fn handle_term_interrupt(_sig: libc::c_int) { 
+    let f = TERM_FLAG.get().unwrap();
+    f.store(true, Ordering::Release);
+}
+
 /// Hook SIGTERM so that it modifies the returned AtomicBool if signalled
-fn hook_sigterm() -> Result<Arc<AtomicBool>, std::io::Error> {
+fn hook_sigterm() {
     set_step!(STEP_SIGNAL_REGISTRATION);
-    let term = Arc::new(AtomicBool::new(false));
+    TERM_FLAG.set(AtomicBool::new(false)).unwrap();
 
-    let term_clone = Arc::clone(&term);
-    let _ = unsafe {
-        signal_hook_registry::register(15 /* SIGTERM */, move || {
-            set_step!(STEP_TERMHANDLER_SIGTERM);
-            term_clone.store(true, Ordering::Relaxed)
-        })
-    }?;
-
-    Ok(term)
+    unsafe {
+        libc::signal(libc::SIGTERM, handle_term_interrupt as libc::sighandler_t);
+    };
 }
 
 struct FailureHandler {
-    term: Arc<AtomicBool>,
 }
 
 impl crate::azureiot::FailureCallback for FailureHandler {
@@ -110,7 +109,7 @@ impl crate::azureiot::FailureCallback for FailureHandler {
                 set_step!(STEP_NETWORK_IS_READY_FAILED);
             }
         };
-        self.term.store(true, Ordering::SeqCst);
+        TERM_FLAG.get().unwrap().store(true, Ordering::SeqCst);
     }
 }
 
@@ -192,7 +191,7 @@ impl crate::cloud::CloudCallbacks for UserInterfaceContainer {
 
 // A main(), except that it returns a Result<T,E>, making it easy to invoke functions using the '?' operator.
 fn actual_main(hostname: String) -> Result<(), std::io::Error> {
-    let term = hook_sigterm()?;
+    hook_sigterm();
 
     azs::debug!("Azure IoT Application starting.\n");
 
@@ -214,7 +213,7 @@ fn actual_main(hostname: String) -> Result<(), std::io::Error> {
     let button_check_period = Duration::new(0, 1000 * 1000);
     elt.set_period(button_check_period)?;
 
-    let failure_handler = FailureHandler { term: term.clone() };
+    let failure_handler: FailureHandler = FailureHandler { };
 
     let mut ui_container = UserInterfaceContainer {
         ui,
@@ -235,7 +234,7 @@ fn actual_main(hostname: String) -> Result<(), std::io::Error> {
     //
     // Main loop
     //
-    while !term.load(Ordering::Relaxed) {
+    while !TERM_FLAG.get().unwrap().load(Ordering::Relaxed) {
         let result = event_loop.run(-1, true);
         if let Err(e) = result {
             if e.kind() != std::io::ErrorKind::Interrupted {
