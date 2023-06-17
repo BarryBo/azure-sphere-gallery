@@ -33,7 +33,7 @@ pub trait CloudCallbacks {
 }
 
 struct CloudData<FC, CB:CloudCallbacks> {
-    last_acked_version: u32,
+    last_acked_version: u64,
     date_time_buffer: String,
     fc: FC,
     callbacks: CB,
@@ -54,8 +54,35 @@ impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
 
     fn device_twin_callback_handler(&mut self, content: String)
     {
-        // bugbug: implement
-        azs::debug!("device_twin_callback_handler: {:?}\n", content);
+        let v = serde_json::from_str(&content);
+        if v.is_err() {
+            azs::debug!("WARNING: Cannot parse the string as JSON content.\n");
+        } else {
+            // If we have a desired property for the "thermometerTelemetryUploadEnabled" property, let's
+            // process it.
+            let v: serde_json::Value = v.unwrap();
+            let desired = v.get("desired");
+            let desired_properties = match desired {
+                Some(value) => value,
+                None => &v
+            };
+            let thermometer_telemetry_upload_enabled = desired_properties.get("thermometerTelemetryUploadEnabled");
+            if thermometer_telemetry_upload_enabled.is_some() {
+                let thermometer_telemetry_upload_enabled = thermometer_telemetry_upload_enabled.unwrap().as_bool().unwrap_or(false);
+
+                // The parson JSON parser returns 0 if json_object_dotget_number() fails to parse.
+                let desired_version = desired_properties["$version"].as_u64().unwrap_or(0);
+
+                // If there is a desired property change (including at boot, restart and
+                // reconnection), the device should implement the logic that decides whether it has
+                // to be applied or not. In this sample, we model this logic as an always-true
+                // clause, just as a place holder for an actual logic (if any needed).
+
+                // If accepted, the device must ack the desired version number.
+                self.last_acked_version = desired_version;
+                self.callbacks.telemetry_upload_enabled_changed(thermometer_telemetry_upload_enabled, true);
+            }
+        }
     }
 
     fn device_twin_report_state_ack_handler(&self, success: bool) {

@@ -9,6 +9,7 @@ azure-sphere = { path = "../../azure-sphere", version = "0.1" }
 hardware = { path = "../../hardware"}
 chrono = { version = "0.4.24" }
 signal-hook-registry = { version = "1.4.1" }
+serde_json = "1.0.97"
 
 [profile.dev]
 opt-level = 'z' # Optimize for size
