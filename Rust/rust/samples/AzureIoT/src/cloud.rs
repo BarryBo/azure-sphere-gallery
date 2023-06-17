@@ -32,24 +32,47 @@ pub trait CloudCallbacks {
     }
 }
 
-struct CloudData<FC, CB> {
+struct CloudData<FC, CB:CloudCallbacks> {
     last_acked_version: u32,
     date_time_buffer: String,
     fc: FC,
     callbacks: CB,
 }
 
-impl<FC, CB> CloudData<FC, CB> {
-    fn connection_status_callback(&self, connected: bool) {
-        drop(connected)
+impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
+    fn device_method_callback_handler(&mut self, method_name: String, payload: Vec<u8>) -> (i32, Vec<u8>) {
+        if method_name == "displayAlert" {
+            let payload_string = std::str::from_utf8(&payload).unwrap_or("Failed to convert alert to utf8");
+            self.callbacks.display_alert(payload_string);
+            let response_string = "\"Alert message displayed successfully.\""; // must be a JSON string (in quotes)
+            (200, response_string.as_bytes().to_vec())
+        } else {
+            // All other method names are ignored
+            (-1, "{}".as_bytes().to_vec())
+        }
+    }
+
+    fn device_twin_callback_handler(&mut self, content: String)
+    {
+        // bugbug: implement
+        azs::debug!("device_twin_callback_handler: {:?}\n", content);
+    }
+
+    fn device_twin_report_state_ack_handler(&self, success: bool) {
+        if success {
+            azs::debug!("INFO: Azure IoT Hub Device Twin update was successfully sent.\n");
+        } else {
+            azs::debug!("WARNING: Azure IoT Hub Device Twin update FAILED!\n");
+        }
+   
     }
 }
 
-pub struct Cloud<FC, CB> {
+pub struct Cloud<FC, CB:CloudCallbacks> {
     azureiot: AzureIoT<Rc<RefCell<CloudData<FC, CB>>>>,
 }
 
-impl<FC: 'static, CB: 'static> IoCallbackList for Cloud<FC, CB> {
+impl<FC: 'static, CB: CloudCallbacks + 'static> IoCallbackList for Cloud<FC, CB> {
     fn event(&mut self, fd: i32, events: IoEvents) {
         self.azureiot.event(fd, events)
     }
@@ -89,28 +112,47 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
             callbacks,
         };
         let inner = Rc::new(RefCell::new(inner));
-        let iot_callbacks = crate::azureiot::Callbacks::default();
+        let mut iot_callbacks = crate::azureiot::Callbacks::default();
 
-        /*  bugbug: this doesn't appear in Cloud_Initialize
-                let inner_clone = inner.clone();
-                iot_callbacks.connection_status = Some(Box::new(move |status| {
-                    inner_clone
-                        .as_ref()
-                        .borrow_mut()
-                        .callbacks
-                        .connection_changed(status)
-                }));
+        // .connectionStatusCallbackFunction = ConnectionChangedCallbackHandler
+        let inner_clone = inner.clone();
+        iot_callbacks.connection_status = Some(Box::new(move |status| {
+            inner_clone
+                .as_ref()
+                .borrow_mut()
+                .callbacks
+                .connection_changed(status)
+        }));
 
-                let inner_clone = inner.clone();
-                iot_callbacks.device_method =
-                    Some(Box::new(move |method_name: String, payload: Vec<u8>| {
-                        inner_clone
-                            .as_ref()
-                            .borrow_mut()
-                            .callbacks
-                            .device_method(method_name, payload)
-                    }));
-        */
+        // .deviceTwinReceivedCallbackFunction = DeviceTwinCallbackHandler,
+        let inner_clone = inner.clone();
+        iot_callbacks.device_twin_received =
+            Some(Box::new(move |content: String| {
+                inner_clone
+                    .as_ref()
+                    .borrow_mut()
+                    .device_twin_callback_handler(content)
+            }));
+
+        // .deviceTwinReportStateAckCallbackTypeFunction = DeviceTwinReportStateAckCallbackTypeHandler
+        let inner_clone = inner.clone();
+        iot_callbacks.device_twin_report_state_ack =
+            Some(Box::new(move |success: bool| {
+                inner_clone
+                    .as_ref()
+                    .borrow_mut()
+                    .device_twin_report_state_ack_handler(success)
+            }));
+
+        // .deviceMethodCallbackFunction = DeviceMethodCallbackHandler};
+        let inner_clone = inner.clone();
+        iot_callbacks.device_method =
+            Some(Box::new(move |method_name: String, payload: Vec<u8>| {
+                inner_clone
+                    .as_ref()
+                    .borrow_mut()
+                    .device_method_callback_handler(method_name, payload)
+            }));
         let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks, hostname)?;
 
         Ok(Self { azureiot })
