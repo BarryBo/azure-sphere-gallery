@@ -247,7 +247,7 @@ pub fn stored_network_count() -> Result<usize, std::io::Error> {
     if result < 0 {
         Err(Error::last_os_error())
     } else {
-        // Convert from ssize_t to usize now that the failure value of -1 has been handled
+        // Convert from ssize_t to u32 now that the failure value of -1 has been handled
         Ok(result as usize)
     }
 }
@@ -337,12 +337,12 @@ pub fn connected_network_id() -> Result<u32, std::io::Error> {
 /// - This is a blocking call
 ///
 /// The application manifest must include the WifiConfig capability.
-pub fn trigger_scan_and_get_scanned_network_count() -> Result<usize, std::io::Error> {
+pub fn trigger_scan_and_get_scanned_network_count() -> Result<u32, std::io::Error> {
     let count = unsafe { wificonfig::WifiConfig_TriggerScanAndGetScannedNetworkCount() };
     if count < 0 {
         Err(Error::last_os_error())
     } else {
-        Ok(count as usize)
+        Ok(count as u32)
     }
 }
 
@@ -355,7 +355,7 @@ pub fn trigger_scan_and_get_scanned_networks() -> Result<Vec<ScannedNetwork>, st
 
     let networks_ptr = networks.as_mut_ptr();
     let result =
-        unsafe { static_inline_helpers::WifiConfig_GetScannedNetworks_inline(networks_ptr, count) };
+        unsafe { static_inline_helpers::WifiConfig_GetScannedNetworks_inline(networks_ptr, count as usize) };
     if result == -1 {
         Err(Error::last_os_error())
     } else {

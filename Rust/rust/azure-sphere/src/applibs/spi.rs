@@ -144,9 +144,9 @@ impl SPIMaster {
             t_template.writeData = t.write_data.as_ptr();
             t_template.readData = t.read_data.as_mut_ptr();
             t_template.length = if t.write_data.len() == 0 {
-                t.read_data.len() as usize
+                t.read_data.len() as libc::size_t
             } else {
-                min(t.write_data.len(), t.read_data.len()) as usize
+                min(t.write_data.len(), t.read_data.len()) as libc::size_t
             };
             v.push(t_template)
         }
