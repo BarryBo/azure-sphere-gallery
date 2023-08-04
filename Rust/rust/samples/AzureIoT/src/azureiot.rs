@@ -25,11 +25,7 @@ pub struct Callbacks<'a> {
     pub cloud_to_device: Option<Box<dyn FnMut(IotHubMessage /* message */) + 'a>>,
 }
 
-pub trait FailureCallback {
-    fn failure_callback(&mut self, reason: FailureReason) {
-        drop(reason)
-    }
-}
+pub type FailureCallbackFunction = dyn FnMut(FailureReason);
 
 /// check if device is connected to the internet and Azure client is setup every second
 const DEFAULT_CONNECT_PERIOD_SECONDS: u64 = 1;
@@ -69,14 +65,14 @@ enum AuthenticationState {
 }
 
 // An AzureIoT object, representing an IoT Hub client
-pub struct AzureIoT<F> {
-    inner: Rc<RefCell<AzureIoTData<F>>>,
+pub struct AzureIoT {
+    inner: Rc<RefCell<AzureIoTData>>,
 
     /// Immutable state, the underlying IoT Hub client connection
     connection: Connection,
 }
 
-struct AzureIoTData<F> {
+struct AzureIoTData {
     do_work_timer: eventloop_timer_utilities::EventLoopTimer,
     connection_timer: eventloop_timer_utilities::EventLoopTimer,
     connect_period_seconds: u64,
@@ -84,11 +80,11 @@ struct AzureIoTData<F> {
     connection_status: ConnectionStatus,
     client_handle: Option<iothub_device_client::IotHubDeviceClient>,
 
-    failure_callback: F,
+    failure_callback: Box<FailureCallbackFunction>,
     callbacks: Rc<RefCell<Callbacks<'static>>>,
 }
 
-impl<F: 'static> IoCallbackList for AzureIoT<F> {
+impl IoCallbackList for AzureIoT {
     /// Azure timer event:  Check connection status and send telemetry
     fn event(&mut self, fd: i32, _events: IoEvents) {
         let inner = self.inner.as_ref().borrow_mut();
@@ -109,7 +105,7 @@ impl<F: 'static> IoCallbackList for AzureIoT<F> {
     }
 }
 
-impl<F> AzureIoTData<F> {
+impl AzureIoTData {
     // See ConnectionCallbackHandler
     fn connection_status_callback(&mut self, status: ConnectionStatus) {
         azs::debug!("AzureIoT::connection_status_callback: {:?}\n", status);
@@ -233,10 +229,10 @@ impl<F> AzureIoTData<F> {
     }
 }
 
-impl<'a, F: 'static> AzureIoT<F> {
+impl<'a> AzureIoT {
     pub fn new(
         model_id: String,
-        failure_callback: F,
+        failure_callback: Box<FailureCallbackFunction>,
         callbacks: Callbacks<'static>,
         hostname: String,
     ) -> Result<Self, std::io::Error> {

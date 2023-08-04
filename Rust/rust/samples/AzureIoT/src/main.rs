@@ -38,10 +38,11 @@ use azs::applibs::networking;
 use azure_sphere as azs;
 use std::cell::RefCell;
 use std::env::args;
+use std::rc::Rc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 pub mod cloud;
 use crate::cloud::Cloud;
 pub mod azureiot;
@@ -80,7 +81,7 @@ macro_rules! get_step {
 
 static TERM_FLAG: OnceLock<AtomicBool> = OnceLock::new();
 
-extern "C" fn handle_term_interrupt(_sig: libc::c_int) { 
+extern "C" fn handle_term_interrupt(_sig: libc::c_int) {
     let f = TERM_FLAG.get().unwrap();
     f.store(true, Ordering::Release);
 }
@@ -93,24 +94,6 @@ fn hook_sigterm() {
     unsafe {
         libc::signal(libc::SIGTERM, handle_term_interrupt as libc::sighandler_t);
     };
-}
-
-struct FailureHandler {
-}
-
-impl crate::azureiot::FailureCallback for FailureHandler {
-    fn failure_callback(&mut self, reason: FailureReason) {
-        azs::debug!(
-            "exit_code_callback_handler in main(): reason={:?}\n",
-            reason
-        );
-        match reason {
-            FailureReason::NetworkingIsReadyFailed => {
-                set_step!(STEP_NETWORK_IS_READY_FAILED);
-            }
-        };
-        TERM_FLAG.get().unwrap().store(true, Ordering::SeqCst);
-    }
 }
 
 struct UserInterfaceContainer {
@@ -160,32 +143,39 @@ impl UserInterfaceContainer {
         self.ui.set_status(upload_enabled);
         // bugbug: call Cloud_SendThermometerTelemetryUploadEnabledChangedEvent
     }
-}
 
-impl crate::cloud::CloudCallbacks for UserInterfaceContainer {
-    fn connection_changed(&mut self, connected: bool) {
-        azs::debug!(
-            "connection_changed_callback_handler in main(): connected={:?}\n",
-            connected
-        );
-        *self.telemetry_upload_enabled.borrow_mut() = connected;
+    fn get_cloud_callbacks(self: Rc<UserInterfaceContainer>) -> crate::cloud::CloudCallbacks {
+        let self_clone = self.clone();
+        let cc = move |connected: bool| {
+            azs::debug!(
+                "connection_changed_callback_handler in main(): connected={:?}\n",
+                connected
+            );
+            *self_clone.telemetry_upload_enabled.borrow_mut() = connected;
 
-        if connected {
-            // bugbug: call Cloud_SendDeviceDetails(serialNumber)
-            azs::debug!("Main connection-changed callback!\n");
+            if connected {
+                // bugbug: call Cloud_SendDeviceDetails(serialNumber)
+                azs::debug!("Main connection-changed callback!\n");
+            }
+        };
+
+        let tuec = move |upload_enabled: bool, from_cloud: bool| {
+            azs::debug!(
+                "INFO: Thermometer telemetry upload enabled state changed (via cloud): {:?}\n",
+                upload_enabled
+            );
+            self.set_thermometer_telemetry_upload_enabled(upload_enabled, from_cloud);
+        };
+
+        let da = move |alert_message: &str| {
+            azs::debug!("ALERT: {:?}\n", alert_message);
+        };
+
+        crate::cloud::CloudCallbacks {
+            telemetry_upload_enabled_changed: Box::new(tuec),
+            display_alert: Box::new(da),
+            connection_changed: Box::new(cc),
         }
-    }
-
-    fn telemetry_upload_enabled_changed(&mut self, upload_enabled: bool, from_cloud: bool) {
-        azs::debug!(
-            "INFO: Thermometer telemetry upload enabled state changed (via cloud): {:?}\n",
-            upload_enabled
-        );
-        self.set_thermometer_telemetry_upload_enabled(upload_enabled, from_cloud);
-    }
-
-    fn display_alert(&mut self, alert_message: &str) {
-        azs::debug!("ALERT: {:?}\n", alert_message);
     }
 }
 
@@ -213,18 +203,35 @@ fn actual_main(hostname: String) -> Result<(), std::io::Error> {
     let button_check_period = Duration::new(0, 1000 * 1000);
     elt.set_period(button_check_period)?;
 
-    let failure_handler: FailureHandler = FailureHandler { };
+    let failure_handler = |reason: FailureReason| {
+        azs::debug!(
+            "exit_code_callback_handler in main(): reason={:?}\n",
+            reason
+        );
+        match reason {
+            FailureReason::NetworkingIsReadyFailed => {
+                set_step!(STEP_NETWORK_IS_READY_FAILED);
+            }
+        };
+        TERM_FLAG.get().unwrap().store(true, Ordering::SeqCst);
+    };
 
-    let mut ui_container = UserInterfaceContainer {
+    let mut ui_container = Rc::new(UserInterfaceContainer {
         ui,
         elt,
         is_connected: RefCell::new(false),
         telemetry_upload_enabled: RefCell::new(false),
-    };
-    event_loop.register_io(IoEvents::Input, &mut ui_container)?;
+    });
+    // bugbug: register_io doesn't really need an &mut.
+    let obs = Rc::get_mut(&mut ui_container).unwrap();
+    event_loop.register_io(IoEvents::Input, obs)?;
 
     set_step!(STEP_CLOUD_INIT);
-    let mut cloud = Cloud::new(failure_handler, ui_container, hostname)?;
+    let mut cloud = Cloud::new(
+        Box::new(failure_handler),
+        ui_container.get_cloud_callbacks(),
+        hostname,
+    )?;
     azs::debug!("Calling cloud.test()\n");
     cloud.test();
     let reading = cloud::Telemetry { temperature: 28.3 };

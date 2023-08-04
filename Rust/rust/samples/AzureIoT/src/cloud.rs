@@ -1,4 +1,4 @@
-use crate::azureiot::{AzureIoT, FailureCallback, FailureReason, IoTResult};
+use crate::azureiot::{AzureIoT, FailureCallbackFunction, IoTResult};
 use azs::applibs::eventloop::{IoCallbackList, IoEvents};
 use azure_sphere as azs;
 use chrono::{DateTime, Datelike, Timelike, Utc};
@@ -19,31 +19,29 @@ pub enum CloudResult {
     OtherFailure,
 }
 
-pub trait CloudCallbacks {
-    fn telemetry_upload_enabled_changed(&mut self, status: bool, from_cloud: bool) {
-        drop(status);
-        drop(from_cloud);
-    }
-    fn display_alert(&mut self, alert_message: &str) {
-        drop(alert_message);
-    }
-    fn connection_changed(&mut self, connected: bool) {
-        drop(connected);
-    }
+pub struct CloudCallbacks {
+    pub telemetry_upload_enabled_changed: Box<dyn FnMut(bool, bool)>,
+    pub display_alert: Box<dyn FnMut(&str)>,
+    pub connection_changed: Box<dyn FnMut(bool)>,
 }
 
-struct CloudData<FC, CB:CloudCallbacks> {
+struct CloudData {
     last_acked_version: u64,
     date_time_buffer: String,
-    fc: FC,
-    callbacks: CB,
+    //fc: Box<FailureCallbackFunction>,
+    callbacks: CloudCallbacks,
 }
 
-impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
-    fn device_method_callback_handler(&mut self, method_name: String, payload: Vec<u8>) -> (i32, Vec<u8>) {
+impl CloudData {
+    fn device_method_callback_handler(
+        &mut self,
+        method_name: String,
+        payload: Vec<u8>,
+    ) -> (i32, Vec<u8>) {
         if method_name == "displayAlert" {
-            let payload_string = std::str::from_utf8(&payload).unwrap_or("Failed to convert alert to utf8");
-            self.callbacks.display_alert(payload_string);
+            let payload_string =
+                std::str::from_utf8(&payload).unwrap_or("Failed to convert alert to utf8");
+            self.callbacks.display_alert.as_mut()(payload_string);
             let response_string = "\"Alert message displayed successfully.\""; // must be a JSON string (in quotes)
             (200, response_string.as_bytes().to_vec())
         } else {
@@ -52,8 +50,7 @@ impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
         }
     }
 
-    fn device_twin_callback_handler(&mut self, content: String)
-    {
+    fn device_twin_callback_handler(&mut self, content: String) {
         let v = serde_json::from_str(&content);
         if v.is_err() {
             azs::debug!("WARNING: Cannot parse the string as JSON content.\n");
@@ -64,11 +61,15 @@ impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
             let desired = v.get("desired");
             let desired_properties = match desired {
                 Some(value) => value,
-                None => &v
+                None => &v,
             };
-            let thermometer_telemetry_upload_enabled = desired_properties.get("thermometerTelemetryUploadEnabled");
+            let thermometer_telemetry_upload_enabled =
+                desired_properties.get("thermometerTelemetryUploadEnabled");
             if thermometer_telemetry_upload_enabled.is_some() {
-                let thermometer_telemetry_upload_enabled = thermometer_telemetry_upload_enabled.unwrap().as_bool().unwrap_or(false);
+                let thermometer_telemetry_upload_enabled = thermometer_telemetry_upload_enabled
+                    .unwrap()
+                    .as_bool()
+                    .unwrap_or(false);
 
                 // The parson JSON parser returns 0 if json_object_dotget_number() fails to parse.
                 let desired_version = desired_properties["$version"].as_u64().unwrap_or(0);
@@ -80,7 +81,10 @@ impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
 
                 // If accepted, the device must ack the desired version number.
                 self.last_acked_version = desired_version;
-                self.callbacks.telemetry_upload_enabled_changed(thermometer_telemetry_upload_enabled, true);
+                self.callbacks.telemetry_upload_enabled_changed.as_mut()(
+                    thermometer_telemetry_upload_enabled,
+                    true,
+                );
             }
         }
     }
@@ -91,27 +95,20 @@ impl<FC, CB: CloudCallbacks> CloudData<FC, CB> {
         } else {
             azs::debug!("WARNING: Azure IoT Hub Device Twin update FAILED!\n");
         }
-   
     }
 }
 
-pub struct Cloud<FC, CB:CloudCallbacks> {
-    azureiot: AzureIoT<Rc<RefCell<CloudData<FC, CB>>>>,
+pub struct Cloud {
+    azureiot: AzureIoT,
 }
 
-impl<FC: 'static, CB: CloudCallbacks + 'static> IoCallbackList for Cloud<FC, CB> {
+impl IoCallbackList for Cloud {
     fn event(&mut self, fd: i32, events: IoEvents) {
         self.azureiot.event(fd, events)
     }
 
     unsafe fn fd_list(&self) -> Vec<i32> {
         self.azureiot.fd_list()
-    }
-}
-
-impl<FC: FailureCallback, CB: CloudCallbacks> FailureCallback for CloudData<FC, CB> {
-    fn failure_callback(&mut self, reason: FailureReason) {
-        self.fc.failure_callback(reason)
     }
 }
 
@@ -123,10 +120,10 @@ fn azureiot_to_cloud_result(azureiot_result: Result<(), IoTResult>) -> Result<()
     }
 }
 
-impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> {
+impl Cloud {
     pub fn new(
-        failure_callback: FC,
-        callbacks: CB,
+        failure_callback: Box<FailureCallbackFunction>,
+        callbacks: CloudCallbacks,
         hostname: String,
     ) -> Result<Self, std::io::Error> {
         let last_acked_version = 0;
@@ -135,7 +132,7 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
         let inner = CloudData {
             last_acked_version,
             date_time_buffer,
-            fc: failure_callback,
+            //fc: failure_callback,
             callbacks,
         };
         let inner = Rc::new(RefCell::new(inner));
@@ -148,28 +145,27 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
                 .as_ref()
                 .borrow_mut()
                 .callbacks
-                .connection_changed(status)
+                .connection_changed
+                .as_mut()(status)
         }));
 
         // .deviceTwinReceivedCallbackFunction = DeviceTwinCallbackHandler,
         let inner_clone = inner.clone();
-        iot_callbacks.device_twin_received =
-            Some(Box::new(move |content: String| {
-                inner_clone
-                    .as_ref()
-                    .borrow_mut()
-                    .device_twin_callback_handler(content)
-            }));
+        iot_callbacks.device_twin_received = Some(Box::new(move |content: String| {
+            inner_clone
+                .as_ref()
+                .borrow_mut()
+                .device_twin_callback_handler(content)
+        }));
 
         // .deviceTwinReportStateAckCallbackTypeFunction = DeviceTwinReportStateAckCallbackTypeHandler
         let inner_clone = inner.clone();
-        iot_callbacks.device_twin_report_state_ack =
-            Some(Box::new(move |success: bool| {
-                inner_clone
-                    .as_ref()
-                    .borrow_mut()
-                    .device_twin_report_state_ack_handler(success)
-            }));
+        iot_callbacks.device_twin_report_state_ack = Some(Box::new(move |success: bool| {
+            inner_clone
+                .as_ref()
+                .borrow_mut()
+                .device_twin_report_state_ack_handler(success)
+        }));
 
         // .deviceMethodCallbackFunction = DeviceMethodCallbackHandler};
         let inner_clone = inner.clone();
@@ -180,7 +176,12 @@ impl<FC: FailureCallback + 'static, CB: CloudCallbacks + 'static> Cloud<FC, CB> 
                     .borrow_mut()
                     .device_method_callback_handler(method_name, payload)
             }));
-        let azureiot = AzureIoT::new(String::from(MODEL_ID), inner, iot_callbacks, hostname)?;
+        let azureiot = AzureIoT::new(
+            String::from(MODEL_ID),
+            failure_callback,
+            iot_callbacks,
+            hostname,
+        )?;
 
         Ok(Self { azureiot })
     }
