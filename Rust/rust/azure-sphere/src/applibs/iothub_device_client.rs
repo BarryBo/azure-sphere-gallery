@@ -109,13 +109,11 @@ impl IotHubDeviceClient {
         // includes the IotHubMessage, but it's too difficult to fold that into the
         // current generic-with-bounds style.
         unsafe {
-            let event_message_handle = event_message.get_handle();
+            let _event_message_handle = event_message.get_handle();
 
-            let callback = |confirmation_result| {
+            let callback = |_confirmation_result| {
                 crate::debug!("IotDeviceClient send_event_async callback\n");
                 // bugbug: implement
-                drop(event_message_handle);
-                drop(confirmation_result);
             };
             self.client.send_event_async(event_message, callback)
         }
