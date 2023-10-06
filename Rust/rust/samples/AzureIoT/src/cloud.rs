@@ -99,16 +99,16 @@ impl CloudData {
 }
 
 pub struct Cloud {
-    azureiot: AzureIoT,
+    azureiot: RefCell<Rc<AzureIoT>>,
 }
 
 impl IoCallbackList for Cloud {
     fn event(&mut self, fd: i32, events: IoEvents) {
-        self.azureiot.event(fd, events)
+        self.azureiot.borrow().event2(fd, events)
     }
 
     unsafe fn fd_list(&self) -> Vec<i32> {
-        self.azureiot.fd_list()
+        self.azureiot.borrow().fd_list()
     }
 }
 
@@ -183,12 +183,14 @@ impl Cloud {
             hostname,
         )?;
 
-        Ok(Self { azureiot })
+        Ok(Self {
+            azureiot: RefCell::new(azureiot),
+        })
     }
 
     pub fn test(&mut self) {
         azs::debug!("Cloud::test()\n");
-        self.azureiot.test();
+        self.azureiot.borrow().test();
         self.do_work();
     }
 
@@ -232,11 +234,12 @@ impl Cloud {
         );
         let result = self
             .azureiot
+            .borrow()
             .send_telemetry(serialized_telemetry, utc_datetime);
         azureiot_to_cloud_result(result)
     }
 
     pub fn do_work(&self) {
-        self.azureiot.do_work();
+        self.azureiot.borrow().do_work();
     }
 }
